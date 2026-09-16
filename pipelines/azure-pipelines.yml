@@ -22,9 +22,10 @@ variables:
 stages:
   - stage: Validate
     displayName: Application Validation
+
     jobs:
       - job: QualityChecks
-        displayName: Lint, Test and Coverage
+        displayName: Lint, Test, Coverage and SonarQube
         steps:
           - checkout: self
             clean: true
@@ -33,6 +34,17 @@ stages:
             displayName: Use Python $(pythonVersion)
             inputs:
               versionSpec: '$(pythonVersion)'
+
+          # Prepare SonarQube Cloud analysis before application validation.
+          # Analysis configuration is version-controlled in
+          # sonar-project.properties.
+          - task: SonarCloudPrepare@4
+            displayName: Prepare SonarQube Cloud analysis
+            inputs:
+              SonarQube: 'chay-sonarqube-cloud'
+              organization: 'chaithanyanallamothu'
+              scannerMode: 'cli'
+              configMode: 'file'
 
           - script: |
               python -m pip install --upgrade pip
@@ -68,3 +80,15 @@ stages:
             condition: succeededOrFailed()
             inputs:
               summaryFileLocation: '$(System.DefaultWorkingDirectory)/$(applicationPath)/coverage.xml'
+
+          # Run analysis only after pytest has generated coverage.xml.
+          - task: SonarCloudAnalyze@4
+            displayName: Run SonarQube Cloud analysis
+            inputs:
+              jdkversion: 'JAVA_HOME_17_X64'
+
+          # Wait for SonarQube Cloud to calculate the Quality Gate.
+          - task: SonarCloudPublish@4
+            displayName: Publish SonarQube Quality Gate
+            inputs:
+              pollingTimeoutSec: '300'
