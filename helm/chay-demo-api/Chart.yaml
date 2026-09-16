@@ -1,0 +1,6 @@
+apiVersion: v2
+name: chay-demo-api
+description: Production Helm chart for the Chay Enterprise Azure DevSecOps Platform demo API
+type: application
+version: 1.0.0
+appVersion: "1.0.1"
