@@ -1,6 +1,17 @@
 # Chay Enterprise Azure DevSecOps Platform
 # Author: Chaithanya Nallamothu
 # Role: Senior DevSecOps Engineer
+#
+# CI responsibilities:
+#   - Application validation
+#   - SonarQube Cloud analysis
+#   - Secret scanning
+#   - Dependency vulnerability scanning
+#   - Container build
+#   - Container vulnerability gate
+#
+# Deployment is intentionally excluded from CI.
+# Argo CD will own deployment through GitOps.
 
 trigger:
   branches:
@@ -19,13 +30,25 @@ variables:
   pythonVersion: '3.12'
   applicationPath: 'application'
 
+  # Keep the scanner version deterministic instead of pulling "latest".
+  trivyVersion: 'v0.74.0'
+
+  # Security-validation image only.
+  # The Git commit SHA gives every CI build an immutable identity.
+  securityImageRepository: 'chay-demo-api'
+  securityImageTag: '$(Build.SourceVersion)'
+
 stages:
+  # ---------------------------------------------------------------------------
+  # Stage 1 - Application quality validation
+  # ---------------------------------------------------------------------------
   - stage: Validate
     displayName: Application Validation
 
     jobs:
       - job: QualityChecks
         displayName: Lint, Test, Coverage and SonarQube
+
         steps:
           - checkout: self
             clean: true
@@ -35,9 +58,9 @@ stages:
             inputs:
               versionSpec: '$(pythonVersion)'
 
-          # Prepare SonarQube Cloud analysis before application validation.
-          # Analysis configuration is version-controlled in
-          # sonar-project.properties.
+          # Sonar configuration is kept in sonar-project.properties.
+          # Preparation happens before pytest so the later analysis can consume
+          # the generated coverage.xml report.
           - task: SonarCloudPrepare@4
             displayName: Prepare SonarQube Cloud analysis
             inputs:
@@ -47,17 +70,23 @@ stages:
               configMode: 'file'
 
           - script: |
+              set -euo pipefail
+
               python -m pip install --upgrade pip
               pip install -r requirements-dev.txt
             workingDirectory: $(applicationPath)
             displayName: Install application dependencies
 
           - script: |
+              set -euo pipefail
+
               ruff check src tests
             workingDirectory: $(applicationPath)
             displayName: Run Ruff static analysis
 
           - script: |
+              set -euo pipefail
+
               pytest tests \
                 --junitxml=test-results.xml \
                 --cov=src \
@@ -81,14 +110,142 @@ stages:
             inputs:
               summaryFileLocation: '$(System.DefaultWorkingDirectory)/$(applicationPath)/coverage.xml'
 
-          # Run analysis only after pytest has generated coverage.xml.
+          # Run Sonar only after coverage.xml has been generated.
           - task: SonarCloudAnalyze@4
             displayName: Run SonarQube Cloud analysis
             inputs:
               jdkversion: 'JAVA_HOME_17_X64'
 
-          # Wait for SonarQube Cloud to calculate the Quality Gate.
           - task: SonarCloudPublish@4
             displayName: Publish SonarQube Quality Gate
             inputs:
               pollingTimeoutSec: '300'
+
+  # ---------------------------------------------------------------------------
+  # Stage 2 - Security validation
+  # ---------------------------------------------------------------------------
+  - stage: Security
+    displayName: Security Validation
+    dependsOn: Validate
+    condition: succeeded()
+
+    jobs:
+      - job: SecurityChecks
+        displayName: Secret, Dependency and Container Security
+
+        steps:
+          - checkout: self
+            clean: true
+
+          # Pin Trivy so scanner behavior does not unexpectedly change when
+          # Aqua publishes a new release.
+          - script: |
+              set -euo pipefail
+
+              curl -sfL \
+                https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+                | sudo sh -s -- -b /usr/local/bin "$(trivyVersion)"
+
+              echo "Installed Trivy:"
+              trivy --version
+            displayName: Install pinned Trivy $(trivyVersion)
+
+          # -----------------------------------------------------------------
+          # Secret gate
+          #
+          # Scan the checked-out repository for credentials/tokens/private
+          # material that should never reach source control.
+          # -----------------------------------------------------------------
+          - script: |
+              set -euo pipefail
+
+              echo "Running repository secret scan..."
+
+              trivy fs \
+                --scanners secret \
+                --exit-code 1 \
+                --no-progress \
+                .
+
+              echo "Secret scanning gate passed."
+            displayName: Secret scanning gate
+
+          # -----------------------------------------------------------------
+          # Dependency vulnerability gate
+          #
+          # Block fixable HIGH/CRITICAL vulnerabilities discovered from the
+          # application filesystem and dependency manifests.
+          # -----------------------------------------------------------------
+          - script: |
+              set -euo pipefail
+
+              echo "Scanning application dependencies..."
+
+              trivy fs \
+                --scanners vuln \
+                --severity HIGH,CRITICAL \
+                --ignore-unfixed \
+                --exit-code 1 \
+                --no-progress \
+                "$(applicationPath)"
+
+              echo "Dependency vulnerability gate passed."
+            displayName: Dependency vulnerability gate
+
+          # -----------------------------------------------------------------
+          # Container build
+          #
+          # Build linux/amd64 because this is the deployable architecture we
+          # intend to promote toward AKS. The Git SHA is used as the image tag;
+          # no mutable "latest" tag is introduced.
+          # -----------------------------------------------------------------
+          - script: |
+              set -euo pipefail
+
+              IMAGE="$(securityImageRepository):$(securityImageTag)"
+
+              echo "Building security-validation image:"
+              echo "${IMAGE}"
+
+              docker build \
+                --pull \
+                --platform linux/amd64 \
+                --label "org.opencontainers.image.revision=$(Build.SourceVersion)" \
+                --label "org.opencontainers.image.source=$(Build.Repository.Uri)" \
+                --tag "${IMAGE}" \
+                "$(applicationPath)"
+
+              echo
+              echo "Container metadata:"
+
+              docker image inspect "${IMAGE}" \
+                --format='Image={{join .RepoTags ","}} Architecture={{.Architecture}} User={{.Config.User}}'
+            displayName: Build immutable Linux AMD64 container
+
+          # -----------------------------------------------------------------
+          # Container vulnerability gate
+          #
+          # This is the final security decision against the actual container
+          # artifact. Fixable HIGH or CRITICAL vulnerabilities stop CI here
+          # and prevent the artifact from progressing toward JFrog.
+          # -----------------------------------------------------------------
+          - script: |
+              set -euo pipefail
+
+              IMAGE="$(securityImageRepository):$(securityImageTag)"
+
+              echo "Scanning deployable container image:"
+              echo "${IMAGE}"
+
+              trivy image \
+                --scanners vuln \
+                --severity HIGH,CRITICAL \
+                --ignore-unfixed \
+                --exit-code 1 \
+                --no-progress \
+                "${IMAGE}"
+
+              echo
+              echo "Container vulnerability gate passed."
+              echo "No fixable HIGH or CRITICAL vulnerabilities detected."
+            displayName: Container HIGH and CRITICAL vulnerability gate
