@@ -13,6 +13,11 @@ spec:
     - namespace: chay-devsecops
       server: https://kubernetes.default.svc
 
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+      name: chay-devsecops
+
   namespaceResourceWhitelist:
     - group: apps
       kind: Deployment
