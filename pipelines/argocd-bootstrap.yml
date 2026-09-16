@@ -1,0 +1,162 @@
+# Author: Chaithanya Nallamothu
+# Role: Senior DevSecOps Engineer
+#
+# One-time bootstrap pipeline.
+# Installs a version-pinned Argo CD release into the private AKS cluster,
+# establishes the project boundary, and registers the GitOps application.
+#
+# This pipeline is intentionally manual and must not become the normal
+# production deployment path. Argo CD owns continuous delivery after bootstrap.
+
+trigger: none
+pr: none
+
+pool:
+  name: Private-Azure-Agent-Pool
+  demands:
+    - Agent.Name -equals chay-secure-api-prod-agent-01
+
+variables:
+  azureSubscriptionId: 'c514ee69-6634-4342-8a48-9c00338e71aa'
+  aksResourceGroup: 'chay-secure-api-prod-rg'
+  aksClusterName: 'chay-secure-api-prod-aks'
+  argoVersion: 'v3.5.3'
+
+steps:
+- checkout: self
+  clean: true
+
+- bash: |
+    set -euo pipefail
+
+    echo "=== Tooling ==="
+    az version --query '"azure-cli"' -o tsv
+    kubectl version --client
+
+    echo
+    echo "=== Azure Managed Identity Authentication ==="
+    az login --identity --output none
+    az account set --subscription "$(azureSubscriptionId)"
+
+    echo
+    echo "=== Private AKS Authentication ==="
+    az aks get-credentials \
+      --resource-group "$(aksResourceGroup)" \
+      --name "$(aksClusterName)" \
+      --overwrite-existing
+
+    echo
+    echo "=== Kubernetes Authorization ==="
+    kubectl auth can-i create namespaces
+    kubectl auth can-i create customresourcedefinitions.apiextensions.k8s.io
+    kubectl auth can-i create clusterroles.rbac.authorization.k8s.io
+
+    echo
+    echo "=== Bootstrap Argo CD $(argoVersion) ==="
+    kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+
+    kubectl apply \
+      --namespace argocd \
+      --server-side \
+      --force-conflicts \
+      -f "https://raw.githubusercontent.com/argoproj/argo-cd/$(argoVersion)/manifests/install.yaml"
+
+    echo
+    echo "=== Wait For Argo CD ==="
+    kubectl rollout status deployment/argocd-server \
+      -n argocd --timeout=300s
+
+    kubectl rollout status deployment/argocd-repo-server \
+      -n argocd --timeout=300s
+
+    kubectl rollout status statefulset/argocd-application-controller \
+      -n argocd --timeout=300s
+
+    echo
+    echo "=== Argo CD Runtime ==="
+    kubectl get pods -n argocd
+    kubectl get services -n argocd
+
+    echo
+    echo "=== Apply Restricted GitOps Project ==="
+    kubectl apply -f argocd/project.yaml
+
+    echo
+    echo "=== Register GitOps Application ==="
+    kubectl apply -f argocd/application.yaml
+
+    echo
+    echo "=== Wait For GitOps Reconciliation ==="
+
+    for i in $(seq 1 30); do
+      SYNC="$(kubectl get application chay-demo-api \
+        -n argocd \
+        -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
+
+      HEALTH="$(kubectl get application chay-demo-api \
+        -n argocd \
+        -o jsonpath='{.status.health.status}' 2>/dev/null || true)"
+
+      echo "Attempt ${i}/30: Sync=${SYNC:-Pending} Health=${HEALTH:-Pending}"
+
+      if [ "$SYNC" = "Synced" ] && [ "$HEALTH" = "Healthy" ]; then
+        break
+      fi
+
+      sleep 10
+    done
+
+    echo
+    echo "=== Argo CD Application ==="
+    kubectl get application chay-demo-api -n argocd
+
+    SYNC="$(kubectl get application chay-demo-api \
+      -n argocd \
+      -o jsonpath='{.status.sync.status}')"
+
+    HEALTH="$(kubectl get application chay-demo-api \
+      -n argocd \
+      -o jsonpath='{.status.health.status}')"
+
+    if [ "$SYNC" != "Synced" ] || [ "$HEALTH" != "Healthy" ]; then
+      echo "GitOps reconciliation did not reach Synced/Healthy."
+      echo
+      kubectl describe application chay-demo-api -n argocd || true
+      echo
+      kubectl get events -n chay-devsecops \
+        --sort-by='.lastTimestamp' || true
+      exit 1
+    fi
+
+    echo
+    echo "=== Production Workload ==="
+    kubectl get deployment,pods,service -n chay-devsecops -o wide
+
+    echo
+    echo "=== Immutable Runtime Image ==="
+    kubectl get deployment chay-demo-api \
+      -n chay-devsecops \
+      -o jsonpath='{.spec.template.spec.containers[0].image}'
+
+    echo
+    echo
+
+    echo "=== Rollout Validation ==="
+    kubectl rollout status deployment/chay-demo-api \
+      -n chay-devsecops \
+      --timeout=180s
+
+    echo
+    echo "=== GitOps Bootstrap Complete ==="
+    echo "Argo CD version: $(argoVersion)"
+    echo "Application: chay-demo-api"
+    echo "Namespace: chay-devsecops"
+    echo "Sync: $SYNC"
+    echo "Health: $HEALTH"
+
+  displayName: 'Bootstrap Argo CD and validate GitOps'
+
+- bash: |
+    az logout || true
+  displayName: 'Azure logout'
+  condition: always()
