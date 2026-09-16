@@ -5,12 +5,12 @@
 # CI responsibilities:
 #   - Application validation
 #   - SonarQube Cloud analysis
-#   - Secret scanning
-#   - Dependency vulnerability scanning
-#   - Container build
+#   - Source and dependency security validation
+#   - Production container build
 #   - Container vulnerability gate
+#   - Immutable artifact publication to private Azure Container Registry
 #
-# Deployment is intentionally excluded from CI.
+# CI builds and publishes artifacts only.
 # Argo CD will own deployment through GitOps.
 
 trigger:
@@ -23,22 +23,21 @@ pr:
     include:
       - main
 
-pool:
-  vmImage: ubuntu-latest
-
 variables:
   pythonVersion: '3.12'
   applicationPath: 'application'
 
-  # Keep the scanner version deterministic instead of pulling "latest".
+  # Security tooling is version-pinned so scanner behavior remains deterministic.
   trivyVersion: 'v0.74.0'
 
-  # Security-validation image only.
-  # The Git commit SHA gives every CI build an immutable identity.
-  securityImageRepository: 'chay-demo-api'
-  securityImageTag: '$(Build.SourceVersion)'
+  # Azure artifact configuration.
+  acrName: 'chaysecureapiprodacr'
+  acrLoginServer: 'chaysecureapiprodacr.azurecr.io'
+  acrRepository: 'chay-enterprise-devsecops/demo-api'
+  imageTag: '$(Build.SourceVersion)'
 
 stages:
+
   # ---------------------------------------------------------------------------
   # Stage 1 - Application quality validation
   # ---------------------------------------------------------------------------
@@ -49,6 +48,9 @@ stages:
       - job: QualityChecks
         displayName: Lint, Test, Coverage and SonarQube
 
+        pool:
+          vmImage: ubuntu-latest
+
         steps:
           - checkout: self
             clean: true
@@ -58,9 +60,8 @@ stages:
             inputs:
               versionSpec: '$(pythonVersion)'
 
-          # Sonar configuration is kept in sonar-project.properties.
-          # Preparation happens before pytest so the later analysis can consume
-          # the generated coverage.xml report.
+          # Sonar configuration is version-controlled in
+          # sonar-project.properties.
           - task: SonarCloudPrepare@4
             displayName: Prepare SonarQube Cloud analysis
             inputs:
@@ -110,7 +111,6 @@ stages:
             inputs:
               summaryFileLocation: '$(System.DefaultWorkingDirectory)/$(applicationPath)/coverage.xml'
 
-          # Run Sonar only after coverage.xml has been generated.
           - task: SonarCloudAnalyze@4
             displayName: Run SonarQube Cloud analysis
             inputs:
@@ -122,7 +122,7 @@ stages:
               pollingTimeoutSec: '300'
 
   # ---------------------------------------------------------------------------
-  # Stage 2 - Security validation
+  # Stage 2 - Source security validation
   # ---------------------------------------------------------------------------
   - stage: Security
     displayName: Security Validation
@@ -130,15 +130,16 @@ stages:
     condition: succeeded()
 
     jobs:
-      - job: SecurityChecks
-        displayName: Secret, Dependency and Container Security
+      - job: SourceSecurityChecks
+        displayName: Secret and Dependency Security
+
+        pool:
+          vmImage: ubuntu-latest
 
         steps:
           - checkout: self
             clean: true
 
-          # Pin Trivy so scanner behavior does not unexpectedly change when
-          # Aqua publishes a new release.
           - script: |
               set -euo pipefail
 
@@ -146,16 +147,10 @@ stages:
                 https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
                 | sudo sh -s -- -b /usr/local/bin "$(trivyVersion)"
 
-              echo "Installed Trivy:"
               trivy --version
             displayName: Install pinned Trivy $(trivyVersion)
 
-          # -----------------------------------------------------------------
-          # Secret gate
-          #
-          # Scan the checked-out repository for credentials/tokens/private
-          # material that should never reach source control.
-          # -----------------------------------------------------------------
+          # Credentials and private material must never enter source control.
           - script: |
               set -euo pipefail
 
@@ -170,12 +165,8 @@ stages:
               echo "Secret scanning gate passed."
             displayName: Secret scanning gate
 
-          # -----------------------------------------------------------------
-          # Dependency vulnerability gate
-          #
-          # Block fixable HIGH/CRITICAL vulnerabilities discovered from the
-          # application filesystem and dependency manifests.
-          # -----------------------------------------------------------------
+          # Fixable HIGH and CRITICAL dependency vulnerabilities block
+          # progression to artifact creation.
           - script: |
               set -euo pipefail
 
@@ -192,19 +183,112 @@ stages:
               echo "Dependency vulnerability gate passed."
             displayName: Dependency vulnerability gate
 
-          # -----------------------------------------------------------------
-          # Container build
-          #
-          # Build linux/amd64 because this is the deployable architecture we
-          # intend to promote toward AKS. The Git SHA is used as the image tag;
-          # no mutable "latest" tag is introduced.
-          # -----------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # Stage 3 - Build, scan and publish the production artifact
+  #
+  # This stage runs inside the private Azure network because ACR has public
+  # network access disabled. The agent VM uses its system-assigned managed
+  # identity; no registry username/password is stored in the pipeline.
+  # ---------------------------------------------------------------------------
+  - stage: Artifact
+    displayName: Build, Scan and Publish Artifact
+    dependsOn: Security
+    condition: succeeded()
+
+    jobs:
+      - job: BuildScanPublish
+        displayName: Build, Scan and Publish to Private ACR
+
+        pool:
+          name: Private-Azure-Agent-Pool
+          demands:
+            - Agent.Name -equals chay-secure-api-prod-agent-01
+            - docker
+
+        steps:
+          - checkout: self
+            clean: true
+
+          # Validate the tools and identity context on the private agent before
+          # touching the registry.
           - script: |
               set -euo pipefail
 
-              IMAGE="$(securityImageRepository):$(securityImageTag)"
+              echo "Agent:"
+              echo "  Name: $(Agent.Name)"
+              echo "  OS:   $(Agent.OS)"
+              echo
 
-              echo "Building security-validation image:"
+              command -v docker
+              docker --version
+
+              if ! command -v az >/dev/null 2>&1; then
+                echo "ERROR: Azure CLI is not installed on the private agent."
+                exit 1
+              fi
+
+              az version --query '"azure-cli"' -o tsv
+
+              echo
+              echo "Private agent prerequisites passed."
+            displayName: Validate private agent prerequisites
+
+          # Authenticate with the VM's system-assigned managed identity.
+          # No service-principal secret or ACR admin credential is required.
+          - script: |
+              set -euo pipefail
+
+              az login --identity --output none
+              az account set \
+                --subscription "c514ee69-6634-4342-8a48-9c00338e71aa"
+
+              echo "Authenticated Azure identity:"
+              az account show \
+                --query "{Subscription:name,Tenant:tenantId}" \
+                -o table
+
+              echo
+              echo "Authenticating Docker to private ACR..."
+
+              az acr login \
+                --name "$(acrName)"
+
+              echo "Private ACR authentication passed."
+            displayName: Authenticate to Azure and private ACR
+
+          # Install the same pinned Trivy release used by the source-security
+          # stage. Installation is skipped if that exact version already exists.
+          - script: |
+              set -euo pipefail
+
+              EXPECTED_VERSION="${TRIVY_VERSION#v}"
+              CURRENT_VERSION=""
+
+              if command -v trivy >/dev/null 2>&1; then
+                CURRENT_VERSION="$(trivy --version | awk '/^Version:/ {print $2; exit}')"
+              fi
+
+              if [ "${CURRENT_VERSION}" != "${EXPECTED_VERSION}" ]; then
+                echo "Installing Trivy ${TRIVY_VERSION}..."
+
+                curl -sfL \
+                  https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+                  | sudo sh -s -- -b /usr/local/bin "${TRIVY_VERSION}"
+              fi
+
+              trivy --version
+            displayName: Prepare pinned Trivy on private agent
+            env:
+              TRIVY_VERSION: $(trivyVersion)
+
+          # Build the production candidate once on the private x64 agent.
+          # The Git SHA provides an immutable source-to-artifact identity.
+          - script: |
+              set -euo pipefail
+
+              IMAGE="$(acrLoginServer)/$(acrRepository):$(imageTag)"
+
+              echo "Building production artifact:"
               echo "${IMAGE}"
 
               docker build \
@@ -216,25 +300,20 @@ stages:
                 "$(applicationPath)"
 
               echo
-              echo "Container metadata:"
+              echo "Built image metadata:"
 
               docker image inspect "${IMAGE}" \
-                --format='Image={{join .RepoTags ","}} Architecture={{.Architecture}} User={{.Config.User}}'
-            displayName: Build immutable Linux AMD64 container
+                --format='Image={{join .RepoTags ","}} Architecture={{.Architecture}} User={{.Config.User}} Id={{.Id}}'
+            displayName: Build immutable production container
 
-          # -----------------------------------------------------------------
-          # Container vulnerability gate
-          #
-          # This is the final security decision against the actual container
-          # artifact. Fixable HIGH or CRITICAL vulnerabilities stop CI here
-          # and prevent the artifact from progressing toward JFrog.
-          # -----------------------------------------------------------------
+          # Scan the exact image that will be pushed. A fixable HIGH or
+          # CRITICAL finding stops publication.
           - script: |
               set -euo pipefail
 
-              IMAGE="$(securityImageRepository):$(securityImageTag)"
+              IMAGE="$(acrLoginServer)/$(acrRepository):$(imageTag)"
 
-              echo "Scanning deployable container image:"
+              echo "Scanning production artifact:"
               echo "${IMAGE}"
 
               trivy image \
@@ -246,6 +325,70 @@ stages:
                 "${IMAGE}"
 
               echo
-              echo "Container vulnerability gate passed."
+              echo "Container security gate passed."
               echo "No fixable HIGH or CRITICAL vulnerabilities detected."
-            displayName: Container HIGH and CRITICAL vulnerability gate
+            displayName: Production container vulnerability gate
+
+          # Push the exact image that passed the vulnerability gate.
+          - script: |
+              set -euo pipefail
+
+              IMAGE="$(acrLoginServer)/$(acrRepository):$(imageTag)"
+
+              echo "Publishing security-approved artifact:"
+              echo "${IMAGE}"
+
+              docker push "${IMAGE}"
+
+              echo
+              echo "Artifact push completed."
+            displayName: Publish immutable image to private ACR
+
+          # Resolve the registry digest after publication. This gives us the
+          # immutable Git SHA -> image tag -> OCI digest traceability chain that
+          # GitOps will consume later.
+          - script: |
+              set -euo pipefail
+
+              IMAGE="$(acrLoginServer)/$(acrRepository):$(imageTag)"
+
+              echo "Verifying published artifact:"
+              echo "${IMAGE}"
+
+              DIGEST="$(az acr repository show \
+                --name "$(acrName)" \
+                --image "$(acrRepository):$(imageTag)" \
+                --query digest \
+                --output tsv)"
+
+              if [ -z "${DIGEST}" ]; then
+                echo "ERROR: ACR did not return an image digest."
+                exit 1
+              fi
+
+              echo
+              echo "Git commit : $(Build.SourceVersion)"
+              echo "Image      : ${IMAGE}"
+              echo "Digest     : ${DIGEST}"
+              echo
+              echo "Immutable artifact publication verified."
+
+              echo "##vso[task.setvariable variable=publishedImageDigest;isOutput=true]${DIGEST}"
+            name: VerifyArtifact
+            displayName: Verify ACR artifact and capture digest
+
+          # Remove local credentials and image data from the persistent
+          # self-hosted agent after the job.
+          - script: |
+              set +e
+
+              IMAGE="$(acrLoginServer)/$(acrRepository):$(imageTag)"
+
+              docker logout "$(acrLoginServer)" >/dev/null 2>&1
+              docker image rm "${IMAGE}" >/dev/null 2>&1
+
+              az logout >/dev/null 2>&1
+
+              echo "Private agent cleanup completed."
+            displayName: Clean private agent workspace
+            condition: always()
