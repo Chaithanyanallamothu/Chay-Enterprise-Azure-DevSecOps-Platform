@@ -49,7 +49,7 @@ steps:
       echo
       echo "=== Nodes ==="
 
-      kubectl get nodes -o wide
+      echo "Cluster-scoped node inventory intentionally skipped for the CI reader identity."
 
       echo
       echo "=== Namespaces ==="
