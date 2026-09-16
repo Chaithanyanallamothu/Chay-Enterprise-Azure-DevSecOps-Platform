@@ -1,0 +1,70 @@
+# Chay Enterprise Azure DevSecOps Platform
+# Author: Chaithanya Nallamothu
+# Role: Senior DevSecOps Engineer
+
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  pythonVersion: '3.12'
+  applicationPath: 'application'
+
+stages:
+  - stage: Validate
+    displayName: Application Validation
+    jobs:
+      - job: QualityChecks
+        displayName: Lint, Test and Coverage
+        steps:
+          - checkout: self
+            clean: true
+
+          - task: UsePythonVersion@0
+            displayName: Use Python $(pythonVersion)
+            inputs:
+              versionSpec: '$(pythonVersion)'
+
+          - script: |
+              python -m pip install --upgrade pip
+              pip install -r requirements-dev.txt
+            workingDirectory: $(applicationPath)
+            displayName: Install application dependencies
+
+          - script: |
+              ruff check src tests
+            workingDirectory: $(applicationPath)
+            displayName: Run Ruff static analysis
+
+          - script: |
+              pytest tests \
+                --junitxml=test-results.xml \
+                --cov=src \
+                --cov-report=term-missing \
+                --cov-report=xml:coverage.xml
+            workingDirectory: $(applicationPath)
+            displayName: Run unit tests and coverage
+
+          - task: PublishTestResults@2
+            displayName: Publish unit test results
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: '$(applicationPath)/test-results.xml'
+              failTaskOnFailedTests: true
+              testRunTitle: 'Chay Demo API - Unit Tests'
+
+          - task: PublishCodeCoverageResults@2
+            displayName: Publish code coverage
+            condition: succeededOrFailed()
+            inputs:
+              summaryFileLocation: '$(System.DefaultWorkingDirectory)/$(applicationPath)/coverage.xml'
