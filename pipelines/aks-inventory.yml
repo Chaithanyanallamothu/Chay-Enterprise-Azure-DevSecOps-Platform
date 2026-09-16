@@ -1,0 +1,96 @@
+# Temporary read-only AKS inventory
+# Author: Chaithanya Nallamothu
+# Role: Senior DevSecOps Engineer
+
+trigger: none
+pr: none
+
+pool:
+  name: Private-Azure-Agent-Pool
+  demands:
+    - Agent.Name -equals chay-secure-api-prod-agent-01
+
+steps:
+  - checkout: none
+
+  - script: |
+      set -euo pipefail
+
+      echo "=== Private Agent ==="
+      echo "Agent: $(Agent.Name)"
+      echo
+
+      command -v az
+      command -v kubectl
+
+      echo
+      echo "=== Azure Managed Identity ==="
+
+      az login --identity --output none
+
+      az account set \
+        --subscription "c514ee69-6634-4342-8a48-9c00338e71aa"
+
+      echo "Managed identity authentication passed."
+
+      echo
+      echo "=== AKS Credentials ==="
+
+      az aks get-credentials \
+        --resource-group chay-secure-api-prod-rg \
+        --name chay-secure-api-prod-aks \
+        --overwrite-existing
+
+      echo
+      echo "=== Cluster ==="
+
+      kubectl cluster-info
+
+      echo
+      echo "=== Nodes ==="
+
+      kubectl get nodes -o wide
+
+      echo
+      echo "=== Namespaces ==="
+
+      kubectl get namespaces
+
+      echo
+      echo "=== Existing Workloads ==="
+
+      kubectl get deployments,statefulsets,daemonsets \
+        --all-namespaces
+
+      echo
+      echo "=== Existing Services ==="
+
+      kubectl get services \
+        --all-namespaces
+
+      echo
+      echo "=== Argo CD Check ==="
+
+      if kubectl get namespace argocd >/dev/null 2>&1; then
+        echo "Argo CD namespace already exists."
+        kubectl get all -n argocd
+      else
+        echo "Argo CD namespace is not currently present."
+      fi
+
+      echo
+      echo "=== Target Namespace Check ==="
+
+      if kubectl get namespace chay-devsecops >/dev/null 2>&1; then
+        echo "Target namespace already exists."
+        kubectl get all -n chay-devsecops
+      else
+        echo "Target namespace chay-devsecops is not currently present."
+      fi
+
+      echo
+      echo "=== Inventory Complete ==="
+
+      az logout >/dev/null 2>&1 || true
+
+    displayName: Read-only private AKS inventory
