@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: chaysecureapiprodacr.azurecr.io/chay-enterprise-devsecops/demo-api
-  tag: "609f181e009e76f2881796aeedef7d58b725513b"
+  tag: "cce36ef47e07d29ce3e2641a0e7c0e15514da777"
   pullPolicy: IfNotPresent
 
 service:
