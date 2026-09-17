@@ -56,9 +56,27 @@ steps:
 
       echo
       echo "=== Rollout Validation ==="
-      kubectl rollout status deployment/"$(applicationName)" \
+      if ! kubectl rollout status deployment/"$(applicationName)" \
         -n "$(applicationNamespace)" \
-        --timeout=120s
+        --timeout=120s; then
+
+        echo
+        echo "=== Rollout Failure Diagnostics ==="
+
+        kubectl get pods           -n "$(applicationNamespace)"           -o wide || true
+
+        echo
+        echo "=== Pod Events ==="
+
+        kubectl describe pods           -n "$(applicationNamespace)" || true
+
+        echo
+        echo "=== Namespace Events ==="
+
+        kubectl get events           -n "$(applicationNamespace)"           --sort-by='.lastTimestamp' || true
+
+        exit 1
+      fi
 
       echo
       echo "=== Application Endpoint Validation ==="
