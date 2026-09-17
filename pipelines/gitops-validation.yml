@@ -122,26 +122,52 @@ steps:
 
       trap cleanup EXIT
 
-      for i in {1..20}; do
-        if curl --silent --fail http://127.0.0.1:18080/health >/dev/null; then
+      echo "Waiting for application port-forward..."
+
+      APP_FORWARD_READY=false
+
+      for attempt in $(seq 1 20); do
+        if ! kill -0 "$PORT_FORWARD_PID" 2>/dev/null; then
+          echo "ERROR: kubectl port-forward process exited."
+          cat /tmp/chay-port-forward.log || true
+          exit 1
+        fi
+
+        if curl --fail --silent --output /dev/null \
+          http://127.0.0.1:18080/health; then
+          APP_FORWARD_READY=true
+          echo "Application port-forward ready on attempt $attempt."
           break
         fi
+
         sleep 2
       done
 
+      if [ "$APP_FORWARD_READY" != "true" ]; then
+        echo "ERROR: Application port-forward did not become ready."
+        echo "=== Application port-forward diagnostics ==="
+        cat /tmp/chay-port-forward.log || true
+        exit 1
+      fi
+
+      echo
       echo "--- /health ---"
-      curl --fail --silent --show-error http://127.0.0.1:18080/health
+      curl --fail --silent http://127.0.0.1:18080/health
       echo
 
+      echo
       echo "--- /ready ---"
-      curl --fail --silent --show-error http://127.0.0.1:18080/ready
+      curl --fail --silent http://127.0.0.1:18080/ready
       echo
 
+      echo
       echo "--- /version ---"
-      curl --fail --silent --show-error http://127.0.0.1:18080/version
+      curl --fail --silent http://127.0.0.1:18080/version
       echo
 
-      echo
+      kill "$PORT_FORWARD_PID" >/dev/null 2>&1 || true
+      trap - EXIT
+
       echo
       echo "=== Monitoring Runtime Validation ==="
 
