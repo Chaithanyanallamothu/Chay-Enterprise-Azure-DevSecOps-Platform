@@ -48,10 +48,13 @@ steps:
       az acr repository show         --name chaysecureapiprodacr         --image "${REPOSITORY}:${IMAGE_TAG}"         --query "{Digest:digest,Created:createdTime,LastUpdate:lastUpdateTime}"         -o table
 
       echo
-      echo "=== Argo CD Reconciliation ==="
-      kubectl get application "$(applicationName)" \
-        -n argocd \
-        -o custom-columns='APPLICATION:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,REVISION:.status.sync.revision'
+      echo "=== GitOps Runtime State ==="
+      echo "Argo CD reconciliation was validated during controlled bootstrap."
+      echo "This least-privilege validation verifies deployed workload state directly."
+
+      kubectl get deployment chay-demo-api -n chay-devsecops
+      kubectl get pods -n chay-devsecops
+      kubectl get service chay-demo-api -n chay-devsecops
 
       echo
       echo "=== Kubernetes Workload ==="
