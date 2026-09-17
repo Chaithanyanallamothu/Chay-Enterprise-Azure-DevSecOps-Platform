@@ -14,7 +14,7 @@ containerPort: 8080
 
 resources:
   requests:
-    cpu: 20m
+    cpu: 5m
     memory: 64Mi
   limits:
     cpu: 250m
