@@ -12,8 +12,8 @@ RUN apt-get update \
     && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/*
 
-RUN addgroup --system appgroup \
-    && adduser --system --ingroup appgroup appuser
+RUN addgroup --system --gid 10001 appgroup \
+    && adduser --system --uid 10001 --ingroup appgroup appuser
 
 COPY requirements.txt .
 
@@ -21,7 +21,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
 
-USER appuser
+USER 10001:10001
 
 EXPOSE 8080
 
