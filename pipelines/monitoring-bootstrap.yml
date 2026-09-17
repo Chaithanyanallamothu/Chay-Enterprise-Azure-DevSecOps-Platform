@@ -1,0 +1,53 @@
+# Author: Chaithanya Nallamothu
+# Role: Senior DevSecOps Engineer
+
+trigger: none
+pr: none
+
+pool:
+  name: Private-Azure-Agent-Pool
+  demands:
+    - Agent.Name -equals chay-secure-api-prod-agent-01
+
+steps:
+- checkout: self
+
+- bash: |
+    set -euo pipefail
+
+    echo "=== Azure Managed Identity ==="
+    az login --identity --output none
+    az account set --subscription "c514ee69-6634-4342-8a48-9c00338e71aa"
+
+    echo
+    echo "=== Private AKS Connection ==="
+    az aks get-credentials \
+      --resource-group chay-secure-api-prod-rg \
+      --name chay-secure-api-prod-aks \
+      --overwrite-existing
+
+    kubelogin convert-kubeconfig -l azurecli
+
+    echo
+    echo "=== Current Monitoring Bootstrap Authorization ==="
+
+    echo -n "Get AppProject: "
+    kubectl auth can-i get appprojects.argoproj.io -n argocd
+
+    echo -n "Patch AppProject: "
+    kubectl auth can-i patch appprojects.argoproj.io -n argocd
+
+    echo -n "Create Application: "
+    kubectl auth can-i create applications.argoproj.io -n argocd
+
+    echo -n "Patch Application: "
+    kubectl auth can-i patch applications.argoproj.io -n argocd
+
+    echo -n "Create monitoring namespace: "
+    kubectl auth can-i create namespaces
+
+    echo
+    echo "=== Authorization Check Complete ==="
+
+    az logout
+  displayName: Check monitoring bootstrap authorization
