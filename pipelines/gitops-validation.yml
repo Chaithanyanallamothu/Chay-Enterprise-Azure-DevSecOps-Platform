@@ -37,6 +37,11 @@ steps:
         --overwrite-existing
 
       echo
+      echo "=== AKS To ACR Integration Diagnostic ==="
+
+      az aks check-acr         --resource-group "$(aksResourceGroup)"         --name "$(aksClusterName)"         --acr chaysecureapiprodacr.azurecr.io || true
+
+      echo
       echo "=== Argo CD Reconciliation ==="
       kubectl get application "$(applicationName)" \
         -n argocd \
