@@ -173,12 +173,7 @@ steps:
 
       echo "$PROM_RESULT" | python3 -m json.tool
 
-      PROM_VALUE=$(echo "$PROM_RESULT" | python3 -c '
-import json, sys
-data = json.load(sys.stdin)
-results = data.get("data", {}).get("result", [])
-print(results[0]["value"][1] if results else "")
-')
+      PROM_VALUE=$(echo "$PROM_RESULT" | python3 -c 'import json,sys; data=json.load(sys.stdin); results=data.get("data",{}).get("result",[]); print(results[0]["value"][1] if results else "")')
 
       if [ "$PROM_VALUE" != "1" ]; then
         echo "ERROR: chay-demo-api Prometheus target is not UP"
