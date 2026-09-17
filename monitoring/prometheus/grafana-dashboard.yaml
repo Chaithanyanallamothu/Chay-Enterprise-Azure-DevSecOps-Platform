@@ -1,0 +1,130 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-chay-api
+  namespace: monitoring
+data:
+  chay-api.json: |
+    {
+      "annotations": {
+        "list": []
+      },
+      "editable": false,
+      "graphTooltip": 1,
+      "panels": [
+        {
+          "title": "API Requests / Second",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum(rate(chay_http_requests_total[1m]))",
+              "legendFormat": "requests/sec"
+            }
+          ],
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          }
+        },
+        {
+          "title": "P95 Request Latency",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(chay_http_request_duration_seconds_bucket[5m])))",
+              "legendFormat": "P95"
+            }
+          ],
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          }
+        },
+        {
+          "title": "P99 Request Latency",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(chay_http_request_duration_seconds_bucket[5m])))",
+              "legendFormat": "P99"
+            }
+          ],
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 8
+          }
+        },
+        {
+          "title": "Orders Created",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "sum(chay_orders_created_total)",
+              "legendFormat": "created"
+            }
+          ],
+          "gridPos": {
+            "h": 8,
+            "w": 6,
+            "x": 12,
+            "y": 8
+          }
+        },
+        {
+          "title": "Orders Failed",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "sum(chay_orders_failed_total)",
+              "legendFormat": "failed"
+            }
+          ],
+          "gridPos": {
+            "h": 8,
+            "w": 6,
+            "x": 18,
+            "y": 8
+          }
+        },
+        {
+          "title": "Prometheus Target",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "up{job=\"chay-demo-api\"}",
+              "legendFormat": "chay-demo-api"
+            }
+          ],
+          "gridPos": {
+            "h": 6,
+            "w": 24,
+            "x": 0,
+            "y": 16
+          }
+        }
+      ],
+      "refresh": "10s",
+      "schemaVersion": 41,
+      "tags": [
+        "devsecops",
+        "fastapi",
+        "prometheus"
+      ],
+      "templating": {
+        "list": []
+      },
+      "time": {
+        "from": "now-15m",
+        "to": "now"
+      },
+      "timezone": "browser",
+      "title": "Chay Demo API - Runtime Observability",
+      "uid": "chay-demo-api",
+      "version": 1
+    }
