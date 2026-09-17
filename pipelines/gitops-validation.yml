@@ -139,5 +139,93 @@ steps:
       echo
 
       echo
+      echo
+      echo "=== Monitoring Runtime Validation ==="
+
+      kubectl get deployment,pods,service -n monitoring
+
+      echo
+      echo "=== Prometheus Rollout ==="
+      kubectl rollout status deployment/prometheus \
+        -n monitoring \
+        --timeout=180s
+
+      echo
+      echo "=== Grafana Rollout ==="
+      kubectl rollout status deployment/grafana \
+        -n monitoring \
+        --timeout=180s
+
+      echo
+      echo "=== Prometheus Scrape Validation ==="
+
+      kubectl port-forward \
+        -n monitoring \
+        service/prometheus 9090:9090 \
+        >/tmp/prometheus-validation.log 2>&1 &
+      PROM_PID=$!
+
+      sleep 5
+
+      PROM_RESULT=$(curl --fail --silent --get \
+        --data-urlencode 'query=up{job="chay-demo-api"}' \
+        http://127.0.0.1:9090/api/v1/query)
+
+      echo "$PROM_RESULT" | python3 -m json.tool
+
+      PROM_VALUE=$(echo "$PROM_RESULT" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+results = data.get("data", {}).get("result", [])
+print(results[0]["value"][1] if results else "")
+')
+
+      if [ "$PROM_VALUE" != "1" ]; then
+        echo "ERROR: chay-demo-api Prometheus target is not UP"
+        kill "$PROM_PID" >/dev/null 2>&1 || true
+        exit 1
+      fi
+
+      kill "$PROM_PID" >/dev/null 2>&1 || true
+
+      echo "Prometheus target chay-demo-api = UP"
+
+      echo
+      echo "=== Grafana Health Validation ==="
+
+      kubectl port-forward \
+        -n monitoring \
+        service/grafana 3000:3000 \
+        >/tmp/grafana-validation.log 2>&1 &
+      GRAFANA_PID=$!
+
+      sleep 5
+
+      curl --fail --silent \
+        http://127.0.0.1:3000/api/health \
+        | python3 -m json.tool
+
+      echo
+      echo "=== Grafana Dashboard Validation ==="
+
+      DASHBOARD_RESULT=$(curl --fail --silent \
+        'http://127.0.0.1:3000/api/search?query=Chay')
+
+      echo "$DASHBOARD_RESULT" | python3 -m json.tool
+
+      echo "$DASHBOARD_RESULT" | grep -q "Chay Demo API - Runtime Observability" || {
+        echo "ERROR: Provisioned Grafana dashboard was not found"
+        kill "$GRAFANA_PID" >/dev/null 2>&1 || true
+        exit 1
+      }
+
+      kill "$GRAFANA_PID" >/dev/null 2>&1 || true
+
+      echo
+      echo "Prometheus target: UP"
+      echo "Grafana API: Healthy"
+      echo "Grafana dashboard: Provisioned"
+      echo "=== Monitoring Validation Complete ==="
+
       echo "=== GitOps Recovery Validation Complete ==="
     displayName: 'Validate Argo CD recovery and AKS workload'
