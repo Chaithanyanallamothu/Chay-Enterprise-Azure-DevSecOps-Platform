@@ -39,7 +39,7 @@ steps:
       echo
       echo "=== Private ACR Artifact Verification ==="
 
-      IMAGE_TAG="3910d18757cfc07d839de69e078e0dcdc2b0780"
+      IMAGE_TAG=$(awk '/^[[:space:]]*tag:/ {gsub(/"/, "", $2); print $2; exit}' helm/chay-demo-api/values.yaml)
       REPOSITORY="chay-enterprise-devsecops/demo-api"
 
       echo "Repository: ${REPOSITORY}"
