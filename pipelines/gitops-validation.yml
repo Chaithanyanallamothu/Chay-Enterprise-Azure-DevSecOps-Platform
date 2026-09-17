@@ -1,0 +1,101 @@
+# Author: Chaithanya Nallamothu
+# Role: Senior DevSecOps Engineer
+#
+# Read-only validation of the GitOps-managed workload after Argo CD reconciliation.
+
+trigger: none
+pr: none
+
+pool:
+  name: Private-Azure-Agent-Pool
+  demands:
+    - Agent.Name -equals chay-secure-api-prod-agent-01
+
+variables:
+  azureSubscriptionId: 'c514ee69-6634-4342-8a48-9c00338e71aa'
+  aksResourceGroup: 'chay-secure-api-prod-rg'
+  aksClusterName: 'chay-secure-api-prod-aks'
+  applicationName: 'chay-demo-api'
+  applicationNamespace: 'chay-devsecops'
+
+steps:
+  - checkout: self
+    clean: true
+
+  - bash: |
+      set -euo pipefail
+
+      echo "=== Authenticate With Azure Managed Identity ==="
+      az login --identity --output none
+      az account set --subscription "$(azureSubscriptionId)"
+
+      echo
+      echo "=== Connect To Private AKS ==="
+      az aks get-credentials \
+        --resource-group "$(aksResourceGroup)" \
+        --name "$(aksClusterName)" \
+        --overwrite-existing
+
+      echo
+      echo "=== Argo CD Reconciliation ==="
+      kubectl get application "$(applicationName)" \
+        -n argocd \
+        -o custom-columns='APPLICATION:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,REVISION:.status.sync.revision'
+
+      echo
+      echo "=== Kubernetes Workload ==="
+      kubectl get deployment,pods,service \
+        -n "$(applicationNamespace)" \
+        -o wide
+
+      echo
+      echo "=== Deployment Resource Configuration ==="
+      kubectl get deployment "$(applicationName)" \
+        -n "$(applicationNamespace)" \
+        -o jsonpath='CPU Request: {.spec.template.spec.containers[0].resources.requests.cpu}{"\n"}Memory Request: {.spec.template.spec.containers[0].resources.requests.memory}{"\n"}CPU Limit: {.spec.template.spec.containers[0].resources.limits.cpu}{"\n"}Memory Limit: {.spec.template.spec.containers[0].resources.limits.memory}{"\n"}Image: {.spec.template.spec.containers[0].image}{"\n"}'
+
+      echo
+      echo "=== Rollout Validation ==="
+      kubectl rollout status deployment/"$(applicationName)" \
+        -n "$(applicationNamespace)" \
+        --timeout=120s
+
+      echo
+      echo "=== Application Endpoint Validation ==="
+
+      kubectl port-forward \
+        -n "$(applicationNamespace)" \
+        service/"$(applicationName)" \
+        18080:80 >/tmp/chay-port-forward.log 2>&1 &
+
+      PORT_FORWARD_PID=$!
+
+      cleanup() {
+        kill "$PORT_FORWARD_PID" >/dev/null 2>&1 || true
+        az logout >/dev/null 2>&1 || true
+      }
+
+      trap cleanup EXIT
+
+      for i in {1..20}; do
+        if curl --silent --fail http://127.0.0.1:18080/health >/dev/null; then
+          break
+        fi
+        sleep 2
+      done
+
+      echo "--- /health ---"
+      curl --fail --silent --show-error http://127.0.0.1:18080/health
+      echo
+
+      echo "--- /ready ---"
+      curl --fail --silent --show-error http://127.0.0.1:18080/ready
+      echo
+
+      echo "--- /version ---"
+      curl --fail --silent --show-error http://127.0.0.1:18080/version
+      echo
+
+      echo
+      echo "=== GitOps Recovery Validation Complete ==="
+    displayName: 'Validate Argo CD recovery and AKS workload'
