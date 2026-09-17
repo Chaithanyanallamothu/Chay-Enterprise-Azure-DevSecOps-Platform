@@ -37,9 +37,15 @@ steps:
         --overwrite-existing
 
       echo
-      echo "=== AKS To ACR Integration Diagnostic ==="
+      echo "=== Private ACR Artifact Verification ==="
 
-      az aks check-acr         --resource-group "$(aksResourceGroup)"         --name "$(aksClusterName)"         --acr chaysecureapiprodacr.azurecr.io || true
+      IMAGE_TAG="3910d18757cfc07d839de69e078e0dcdc2b0780"
+      REPOSITORY="chay-enterprise-devsecops/demo-api"
+
+      echo "Repository: ${REPOSITORY}"
+      echo "Tag: ${IMAGE_TAG}"
+
+      az acr repository show         --name chaysecureapiprodacr         --image "${REPOSITORY}:${IMAGE_TAG}"         --query "{Digest:digest,Created:createdTime,LastUpdate:lastUpdateTime}"         -o table
 
       echo
       echo "=== Argo CD Reconciliation ==="
