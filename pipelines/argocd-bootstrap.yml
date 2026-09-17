@@ -86,6 +86,10 @@ steps:
     kubectl apply -f argocd/application.yaml
 
     echo
+    echo "=== Register Monitoring GitOps Application ==="
+    kubectl apply -f argocd/monitoring-application.yaml
+
+    echo
     echo "=== Cluster Capacity Before Reconciliation ==="
     kubectl top nodes || true
 
