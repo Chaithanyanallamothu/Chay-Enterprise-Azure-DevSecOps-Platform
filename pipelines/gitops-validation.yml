@@ -66,6 +66,19 @@ steps:
         -o jsonpath='CPU Request: {.spec.template.spec.containers[0].resources.requests.cpu}{"\n"}Memory Request: {.spec.template.spec.containers[0].resources.requests.memory}{"\n"}CPU Limit: {.spec.template.spec.containers[0].resources.limits.cpu}{"\n"}Memory Limit: {.spec.template.spec.containers[0].resources.limits.memory}{"\n"}Image: {.spec.template.spec.containers[0].image}{"\n"}'
 
       echo
+      echo
+      echo "=== Current Cluster Capacity ==="
+      kubectl top nodes || true
+
+      echo
+      echo "=== Current Pod CPU Requests ==="
+      kubectl get pods -A         -o custom-columns='NAMESPACE:.metadata.namespace,POD:.metadata.name,CPU_REQUEST:.spec.containers[*].resources.requests.cpu,MEMORY_REQUEST:.spec.containers[*].resources.requests.memory'         --sort-by=.metadata.namespace || true
+
+      echo
+      echo "=== Node Allocated Resources ==="
+      kubectl describe node | sed -n '/Allocated resources:/,/Events:/p' || true
+
+      echo
       echo "=== Rollout Validation ==="
       if ! kubectl rollout status deployment/"$(applicationName)" \
         -n "$(applicationNamespace)" \
