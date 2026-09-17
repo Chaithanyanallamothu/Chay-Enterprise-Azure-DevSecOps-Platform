@@ -10,16 +10,20 @@ spec:
     - https://github.com/Chaithanyanallamothu/Chay-Enterprise-Azure-DevSecOps-Platform.git
 
   destinations:
-    - namespace: chay-devsecops
-      server: https://kubernetes.default.svc
+  - namespace: chay-devsecops
+    server: https://kubernetes.default.svc
+
+  - namespace: monitoring
+    server: https://kubernetes.default.svc
 
   clusterResourceWhitelist:
     - group: ""
       kind: Namespace
-      name: chay-devsecops
 
   namespaceResourceWhitelist:
-    - group: apps
-      kind: Deployment
-    - group: ""
-      kind: Service
+  - group: apps
+    kind: Deployment
+  - group: ""
+    kind: Service
+  - group: ""
+    kind: ConfigMap

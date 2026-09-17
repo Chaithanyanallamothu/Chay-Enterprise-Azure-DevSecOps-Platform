@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: chay-monitoring
+  namespace: argocd
+spec:
+  project: chay-enterprise-devsecops
+
+  source:
+    repoURL: https://github.com/Chaithanyanallamothu/Chay-Enterprise-Azure-DevSecOps-Platform.git
+    targetRevision: main
+    path: monitoring/prometheus
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
