@@ -86,6 +86,19 @@ steps:
     kubectl apply -f argocd/application.yaml
 
     echo
+    echo "=== Cluster Capacity Before Reconciliation ==="
+    kubectl top nodes || true
+
+    echo
+    echo "=== Node Resource Allocation ==="
+    kubectl describe nodes | sed -n '/Allocated resources:/,/Events:/p' || true
+
+    echo
+    echo "=== Pod Resource Requests ==="
+    kubectl get pods --all-namespaces \
+      -o custom-columns='NAMESPACE:.metadata.namespace,POD:.metadata.name,CPU_REQUEST:.spec.containers[*].resources.requests.cpu,MEMORY_REQUEST:.spec.containers[*].resources.requests.memory' || true
+
+    echo
     echo "=== Wait For GitOps Reconciliation ==="
 
     for i in $(seq 1 30); do
