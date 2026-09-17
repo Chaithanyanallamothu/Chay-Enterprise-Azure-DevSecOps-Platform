@@ -20,7 +20,7 @@ steps:
     az account set --subscription "c514ee69-6634-4342-8a48-9c00338e71aa"
 
     echo
-    echo "=== Private AKS Connection ==="
+    echo "=== Connect To Private AKS ==="
     az aks get-credentials \
       --resource-group chay-secure-api-prod-rg \
       --name chay-secure-api-prod-aks \
@@ -29,25 +29,73 @@ steps:
     kubelogin convert-kubeconfig -l azurecli
 
     echo
-    echo "=== Current Monitoring Bootstrap Authorization ==="
-
-    echo -n "Get AppProject: "
-    kubectl auth can-i get appprojects.argoproj.io -n argocd
-
-    echo -n "Patch AppProject: "
-    kubectl auth can-i patch appprojects.argoproj.io -n argocd
-
-    echo -n "Create Application: "
-    kubectl auth can-i create applications.argoproj.io -n argocd
-
-    echo -n "Patch Application: "
-    kubectl auth can-i patch applications.argoproj.io -n argocd
-
-    echo -n "Create monitoring namespace: "
-    kubectl auth can-i create namespaces
+    echo "=== Update Restricted Argo CD Project ==="
+    kubectl apply -f argocd/project.yaml
 
     echo
-    echo "=== Authorization Check Complete ==="
+    echo "=== Register Monitoring Application ==="
+    kubectl apply -f argocd/monitoring-application.yaml
 
-    az logout
-  displayName: Check monitoring bootstrap authorization
+    echo
+    echo "=== Wait For Monitoring GitOps Reconciliation ==="
+    for i in $(seq 1 30); do
+      SYNC="$(kubectl get application chay-monitoring \
+        -n argocd \
+        -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
+
+      HEALTH="$(kubectl get application chay-monitoring \
+        -n argocd \
+        -o jsonpath='{.status.health.status}' 2>/dev/null || true)"
+
+      echo "Attempt ${i}/30: Sync=${SYNC:-Pending} Health=${HEALTH:-Pending}"
+
+      if [ "$SYNC" = "Synced" ] && [ "$HEALTH" = "Healthy" ]; then
+        break
+      fi
+
+      sleep 10
+    done
+
+    echo
+    echo "=== Argo CD Monitoring Application ==="
+    kubectl get application chay-monitoring -n argocd
+
+    echo
+    echo "=== Prometheus Runtime ==="
+    kubectl get deployment,pods,service -n monitoring -o wide
+
+    echo
+    echo "=== Prometheus Rollout ==="
+    kubectl rollout status deployment/prometheus \
+      -n monitoring \
+      --timeout=180s
+
+    echo
+    echo "=== Prometheus Metrics Endpoint ==="
+    kubectl port-forward \
+      -n monitoring \
+      service/prometheus 9090:9090 >/tmp/prometheus-port-forward.log 2>&1 &
+    PF_PID=$!
+
+    cleanup() {
+      kill "$PF_PID" >/dev/null 2>&1 || true
+      az logout >/dev/null 2>&1 || true
+    }
+    trap cleanup EXIT
+
+    sleep 5
+
+    curl --fail --silent \
+      "http://127.0.0.1:9090/-/healthy"
+
+    echo
+    echo
+    echo "=== Demo API Prometheus Target ==="
+    curl --fail --silent \
+      "http://127.0.0.1:9090/api/v1/targets" \
+      | python3 -m json.tool \
+      | grep -E '"health"|"scrapeUrl"|"lastError"' || true
+
+    echo
+    echo "=== Monitoring Bootstrap Complete ==="
+  displayName: Bootstrap and validate Prometheus through GitOps
