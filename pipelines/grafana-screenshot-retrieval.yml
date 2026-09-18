@@ -33,11 +33,27 @@ steps:
       kubelogin convert-kubeconfig -l azurecli
 
       echo
-      echo "Waiting for screenshot workload..."
-      kubectl rollout status \
-        deployment/grafana-screenshot-capture \
-        -n monitoring \
-        --timeout=240s
+      echo "=== Screenshot workload diagnostics ==="
+
+      kubectl get deployment grafana-screenshot-capture -n monitoring -o wide || true
+
+      kubectl get pods         -n monitoring         -l app=grafana-screenshot-capture         -o wide || true
+
+      echo
+      echo "=== Pod status ==="
+      kubectl get pods         -n monitoring         -l app=grafana-screenshot-capture         -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[0].ready,WAITING:.status.containerStatuses[0].state.waiting.reason,RESTARTS:.status.containerStatuses[0].restartCount'         || true
+
+      echo
+      echo "=== Recent pod events ==="
+      kubectl describe pods         -n monitoring         -l app=grafana-screenshot-capture         | tail -80 || true
+
+      echo
+      echo "=== Container logs ==="
+      kubectl logs         -n monitoring         -l app=grafana-screenshot-capture         --tail=100 || true
+
+      echo
+      echo "=== End diagnostics ==="
+      exit 1
 
       echo
       echo "Screenshot workload:"
