@@ -1,0 +1,139 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k6-autoscaling-test
+  namespace: monitoring
+data:
+  autoscaling.js: |
+    import http from 'k6/http';
+    import { check } from 'k6';
+    
+    export const options = {
+      scenarios: {
+        autoscaling_load: {
+          executor: 'constant-vus',
+          vus: 40,
+          duration: '3m',
+        },
+      },
+    
+      thresholds: {
+        http_req_failed: ['rate<0.01'],
+        checks: ['rate>0.99'],
+      },
+    };
+    
+    const BASE_URL =
+      __ENV.BASE_URL ||
+      'http://chay-demo-api.chay-devsecops.svc.cluster.local';
+    
+    const payload = JSON.stringify({
+      product_id: 'hpa-load-test',
+      quantity: 1,
+      mode: 'normal',
+    });
+    
+    const params = {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    };
+    
+    export default function () {
+      const response = http.post(
+        `${BASE_URL}/api/orders`,
+        payload,
+        params
+      );
+    
+      check(response, {
+        'order created under load': (r) => r.status === 201,
+      });
+    }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k6-autoscaling
+  namespace: monitoring
+  labels:
+    app: k6-autoscaling
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k6-autoscaling
+  template:
+    metadata:
+      labels:
+        app: k6-autoscaling
+    spec:
+      automountServiceAccountToken: false
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 12345
+        runAsGroup: 12345
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: k6
+          image: grafana/k6:0.57.0
+
+          command:
+            - /bin/sh
+            - -c
+
+          args:
+            - |
+              echo "=== HPA Autoscaling Load Test ==="
+              echo "Target: chay-demo-api"
+              echo "Load: 40 VUs for 3 minutes"
+              echo
+
+              k6 run /scripts/autoscaling.js
+              RESULT=$?
+
+              echo
+              echo "=== Autoscaling Load Test Exit Code: ${RESULT} ==="
+
+              if [ "$RESULT" -eq 0 ]; then
+                echo "K6 AUTOSCALING LOAD TEST: PASSED"
+              else
+                echo "K6 AUTOSCALING LOAD TEST: FAILED"
+              fi
+
+              while true; do
+                sleep 3600
+              done
+
+          env:
+            - name: BASE_URL
+              value: http://chay-demo-api.chay-devsecops.svc.cluster.local
+
+          resources:
+            requests:
+              cpu: 1m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+
+          volumeMounts:
+            - name: test-script
+              mountPath: /scripts
+              readOnly: true
+
+      volumes:
+        - name: test-script
+          configMap:
+            name: k6-autoscaling-test

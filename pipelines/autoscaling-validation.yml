@@ -1,0 +1,133 @@
+# Author: Chaithanya Nallamothu
+# Role: Senior DevSecOps Engineer
+#
+# Read-only validation of Kubernetes HPA behavior during controlled k6 load.
+
+trigger: none
+pr: none
+
+pool:
+  name: Private-Azure-Agent-Pool
+  demands:
+    - Agent.Name -equals chay-secure-api-prod-agent-01
+
+variables:
+  subscriptionId: c514ee69-6634-4342-8a48-9c00338e71aa
+  resourceGroup: chay-secure-api-prod-rg
+  aksName: chay-secure-api-prod-aks
+  applicationNamespace: chay-devsecops
+  applicationName: chay-demo-api
+
+steps:
+  - checkout: self
+
+  - bash: |
+      set -euo pipefail
+
+      echo "=== Authenticate With Azure Managed Identity ==="
+      az login --identity --output none
+      az account set --subscription "$(subscriptionId)"
+
+      echo "=== Connect To Private AKS ==="
+      az aks get-credentials \
+        --resource-group "$(resourceGroup)" \
+        --name "$(aksName)" \
+        --overwrite-existing
+
+      kubelogin convert-kubeconfig -l azurecli
+
+      echo
+      echo "=== HPA Autoscaling Validation ==="
+
+      echo "Initial HPA state:"
+      kubectl get hpa "$(applicationName)" \
+        -n "$(applicationNamespace)" -o wide
+
+      echo
+      echo "Waiting for k6 autoscaling workload..."
+      kubectl rollout status deployment/k6-autoscaling \
+        -n monitoring \
+        --timeout=180s
+
+      MAX_REPLICAS_SEEN=0
+      SCALE_OUT_SEEN=false
+
+      echo
+      echo "=== Observe HPA During Load ==="
+
+      for i in $(seq 1 24); do
+        NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+        CURRENT=$(kubectl get hpa "$(applicationName)" \
+          -n "$(applicationNamespace)" \
+          -o jsonpath='{.status.currentReplicas}')
+
+        DESIRED=$(kubectl get hpa "$(applicationName)" \
+          -n "$(applicationNamespace)" \
+          -o jsonpath='{.status.desiredReplicas}')
+
+        CPU=$(kubectl get hpa "$(applicationName)" \
+          -n "$(applicationNamespace)" \
+          -o jsonpath='{.status.currentMetrics[0].resource.current.averageUtilization}' \
+          2>/dev/null || true)
+
+        CPU=${CPU:-NA}
+
+        echo "${NOW} | CPU=${CPU}% | current=${CURRENT} | desired=${DESIRED}"
+
+        if [ "${CURRENT:-0}" -gt "$MAX_REPLICAS_SEEN" ]; then
+          MAX_REPLICAS_SEEN="$CURRENT"
+        fi
+
+        if [ "${DESIRED:-0}" -gt "$MAX_REPLICAS_SEEN" ]; then
+          MAX_REPLICAS_SEEN="$DESIRED"
+        fi
+
+        if [ "${CURRENT:-0}" -ge 2 ] || [ "${DESIRED:-0}" -ge 2 ]; then
+          SCALE_OUT_SEEN=true
+        fi
+
+        sleep 10
+      done
+
+      echo
+      echo "=== Application Pods After Load Observation ==="
+      kubectl get pods \
+        -n "$(applicationNamespace)" \
+        -l app.kubernetes.io/name="$(applicationName)" \
+        -o wide
+
+      echo
+      echo "=== Final HPA State ==="
+      kubectl get hpa "$(applicationName)" \
+        -n "$(applicationNamespace)" \
+        -o wide
+
+      echo
+      echo "=== k6 Autoscaling Results ==="
+
+      K6_LOGS=$(kubectl logs \
+        -n monitoring \
+        deployment/k6-autoscaling)
+
+      echo "$K6_LOGS"
+
+      echo "$K6_LOGS" | grep -q \
+        "K6 AUTOSCALING LOAD TEST: PASSED" || {
+          echo "ERROR: k6 autoscaling load test did not pass."
+          exit 1
+        }
+
+      if [ "$SCALE_OUT_SEEN" != "true" ]; then
+        echo "ERROR: HPA did not scale beyond one replica."
+        exit 1
+      fi
+
+      echo
+      echo "Maximum replicas observed: ${MAX_REPLICAS_SEEN}"
+      echo "HPA scale-out observed: PASSED"
+      echo "k6 autoscaling workload: PASSED"
+      echo
+      echo "=== Autoscaling Validation Complete ==="
+
+    displayName: Validate HPA scaling under k6 load
