@@ -1,0 +1,149 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: monitoring-validator
+  namespace: monitoring
+  labels:
+    app: monitoring-validator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: monitoring-validator
+  template:
+    metadata:
+      labels:
+        app: monitoring-validator
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: validator
+          image: python:3.12-alpine
+          command:
+            - /bin/sh
+            - -c
+          args:
+            - |
+              python - <<'PYTHON'
+              import json
+              import time
+              import urllib.parse
+              import urllib.request
+
+              API = "http://chay-demo-api.chay-devsecops.svc.cluster.local"
+              PROMETHEUS = "http://prometheus.monitoring.svc.cluster.local:9090"
+              GRAFANA = "http://grafana.monitoring.svc.cluster.local:3000"
+
+              def get(url, attempts=15, delay=2):
+                  last_error = None
+                  for attempt in range(1, attempts + 1):
+                      try:
+                          with urllib.request.urlopen(url, timeout=5) as response:
+                              body = response.read().decode()
+                              print(f"Reachable on attempt {attempt}: {url}")
+                              return body
+                      except Exception as exc:
+                          last_error = exc
+                          time.sleep(delay)
+                  raise RuntimeError(f"Request failed for {url}: {last_error}")
+
+              print("=== Private AKS Monitoring Validation ===")
+
+              print("\n=== Application Health ===")
+              health = get(f"{API}/health")
+              print(health)
+
+              print("\n=== Application Readiness ===")
+              ready = get(f"{API}/ready")
+              print(ready)
+
+              print("\n=== Prometheus Target Validation ===")
+              query = urllib.parse.quote('up{job="chay-demo-api"}')
+              prom_body = get(f"{PROMETHEUS}/api/v1/query?query={query}")
+              prom = json.loads(prom_body)
+
+              print(json.dumps(prom, indent=2))
+
+              results = prom.get("data", {}).get("result", [])
+              if not results:
+                  raise RuntimeError(
+                      "Prometheus returned no chay-demo-api target result"
+                  )
+
+              value = results[0]["value"][1]
+
+              if value != "1":
+                  raise RuntimeError(
+                      f"Prometheus chay-demo-api target is not UP: {value}"
+                  )
+
+              print("PASS: Prometheus target chay-demo-api = UP (1)")
+
+              print("\n=== Grafana Health Validation ===")
+              grafana_health = get(f"{GRAFANA}/api/health")
+              print(grafana_health)
+
+              health_json = json.loads(grafana_health)
+              if health_json.get("database") != "ok":
+                  raise RuntimeError(
+                      f"Grafana health check failed: {health_json}"
+                  )
+
+              print("PASS: Grafana API = Healthy")
+
+              print("\n=== Grafana Dashboard Validation ===")
+              dashboard_body = get(
+                  f"{GRAFANA}/api/search?query="
+                  + urllib.parse.quote("Chay")
+              )
+
+              dashboards = json.loads(dashboard_body)
+              print(json.dumps(dashboards, indent=2))
+
+              expected = "Chay Demo API - Runtime Observability"
+
+              if not any(
+                  item.get("title") == expected
+                  for item in dashboards
+              ):
+                  raise RuntimeError(
+                      f"Grafana dashboard not found: {expected}"
+                  )
+
+              print(
+                  "PASS: Grafana dashboard = "
+                  "Chay Demo API - Runtime Observability"
+              )
+
+              print("\n========================================")
+              print("MONITORING VALIDATION: PASSED")
+              print("Application health: PASS")
+              print("Application readiness: PASS")
+              print("Prometheus scrape target: UP")
+              print("Grafana health: PASS")
+              print("Grafana dashboard provisioning: PASS")
+              print("========================================")
+
+              # Keep the pod available so the Reader identity can retrieve logs.
+              while True:
+                  time.sleep(3600)
+              PYTHON
+          resources:
+            requests:
+              cpu: 1m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
