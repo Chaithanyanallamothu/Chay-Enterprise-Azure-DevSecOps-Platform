@@ -1,185 +1,134 @@
-# Container Build and Runtime Validation
+# 02 - Container Build and Runtime Validation
 
-## Purpose
+**Author:** Chaithanya Nallamothu
+**Role:** Senior DevSecOps Engineer
 
-This evidence validates that the application can be packaged and executed as a reproducible Docker container while maintaining the runtime and security controls expected for later CI/CD and Kubernetes deployment.
+## Objective
 
-## Container Design
+The container checkpoint validated that the FastAPI application could run consistently as a hardened non-root OCI container before becoming the artifact consumed by the CI/CD platform.
 
-The application container is based on:
+## Base Image
 
-```text
-python:3.12-slim
-```
+The application uses:
 
-The image is configured to:
+    python:3.12-slim
 
-- Run the FastAPI application through Uvicorn
-- Expose application traffic on port `8080`
-- Install only declared runtime dependencies
-- Run the application as a dedicated non-root user
-- Keep the application version visible through the `/version` endpoint
+The Dockerfile configures:
 
-The initial application artifact was built as:
+    PYTHONDONTWRITEBYTECODE=1
+    PYTHONUNBUFFERED=1
 
-```text
-chay-demo-api:1.0.0
-```
+The application listens on:
 
-## Image Build Validation
+    8080
 
-The container image was built locally and inspected before runtime validation.
+## Non-Root Runtime
 
-Validation confirmed:
+The original image created a dedicated named user:
 
-```text
-Image: chay-demo-api:1.0.0
-Architecture: arm64
-Runtime user: appuser
-```
+    appuser
 
-![Docker image build and metadata](screenshots/02-docker/01-docker-image-build-and-metadata.png)
+Local Docker validation confirmed that the process did not run as root.
 
-## Non-Root Runtime Validation
+That configuration was valid from the local container-runtime perspective, but a later AKS rollout exposed an important Kubernetes compatibility issue.
 
-The container was started locally with port `8080` published to the host.
+Kubernetes reported:
 
-Runtime identity was verified from inside the running container:
+    runAsNonRoot and image has non-numeric user (appuser)
 
-```bash
-docker exec chay-demo-api id
-```
+The problem was not that the application required root privileges.
 
-Result:
+Kubernetes could not deterministically verify that the named image user was non-root while enforcing `runAsNonRoot`.
 
-```text
-uid=100(appuser) gid=101(appgroup) groups=101(appgroup)
-```
+The final Dockerfile therefore uses:
 
-This confirms that the application process does not require root privileges.
+    USER 10001:10001
 
-## Application Validation Inside Docker
+Final identity:
 
-The containerized application was validated through:
+    UID 10001
+    GID 10001
 
-```text
-GET  /health
-GET  /version
-POST /api/orders
-GET  /metrics
-```
+This preserves the non-root security model while making the identity unambiguous to Kubernetes.
 
-Both successful and controlled-failure order paths were exercised.
+## Runtime Validation
 
-Prometheus metrics confirmed that containerized application activity was observable through:
+The final container was validated for:
 
-```text
-chay_http_requests_total
-chay_orders_created_total
-chay_orders_failed_total
-```
+- successful image build
+- Linux/amd64 target architecture
+- numeric non-root identity
+- application startup
+- health endpoint
+- readiness endpoint
+- version endpoint
+- application behavior
+- Prometheus metrics
 
-Application logs also confirmed the expected HTTP success and failure responses.
+The explicit identity check confirmed:
 
-![Container runtime validation](screenshots/02-docker/02-container-runtime-validation.png)
+    uid=10001(appuser)
+    gid=10001(appgroup)
 
-## Docker Desktop Engine Incident
+The image therefore retains a readable Linux user/group mapping while declaring the runtime numerically.
 
-During the initial container workflow, Docker Desktop encountered a local engine failure.
+## Docker Desktop Incident
 
-The first image build failed while containerd attempted to write its metadata database:
+During the container workflow, Docker Desktop itself failed locally.
 
-```text
-read-only file system
-/var/lib/desktop-containerd/daemon/io.containerd.metadata.v1.bolt/meta.db
-```
+The initial error involved containerd metadata storage and included:
 
-Subsequent Docker server requests returned HTTP 500 responses through the Docker Desktop socket.
+    read-only file system
 
-The incident was captured before remediation:
+Subsequent Docker API calls returned HTTP 500 errors.
 
-![Docker engine failure](screenshots/02-docker/troubleshooting/01-docker-engine-500-error.png)
+I separated the daemon problem from the Dockerfile/application by checking the Docker context and engine state.
 
-### Investigation
-
-The following checks were used to distinguish a Docker daemon problem from an application or Dockerfile problem:
-
-```bash
-docker desktop status
-docker context show
-docker version
-docker info
-```
-
-Docker Desktop reported a running application and the expected `desktop-linux` context, while server requests continued to fail.
-
-This isolated the issue to the local Docker engine rather than the application build.
-
-### Recovery
-
-The Docker Desktop engine was restarted using:
-
-```bash
-docker desktop restart
-```
+Docker Desktop was restarted.
 
 After restart:
 
 - Docker client/server communication recovered
-- `docker info` completed successfully
-- The `desktop-linux` engine became responsive
-- `docker run --rm hello-world` completed successfully
-- The application image subsequently built successfully
+- `docker info` worked
+- the `desktop-linux` context responded
+- `hello-world` executed
+- the application image built successfully
 
 A factory reset was not required.
 
-## Security-Remediated Container
+This incident was retained because it demonstrates the distinction between application/container failures and local container-engine failures.
 
-Security scanning of `1.0.0` later identified fixable operating-system and Python dependency vulnerabilities. Those findings are documented separately in `05-security-scanning.md`.
+## Security Remediation Regression
 
-A remediated immutable artifact was created as:
+The container was also rebuilt after dependency and Debian package remediation.
 
-```text
-chay-demo-api:1.0.1
-```
+The remediated image was revalidated instead of assuming that a clean vulnerability result meant the application still behaved correctly.
 
-The updated container retained the non-root runtime model and application behavior.
+The runtime continued to pass application endpoint validation.
 
-Runtime validation confirmed:
+## Final Kubernetes-Compatible Container
 
-```text
-Image: chay-demo-api:1.0.1
-User: appuser
-Health: healthy
-Application version: 1.0.1
-```
+The final GitOps-compatible image is based on the numeric non-root Dockerfile.
 
-Successful and controlled-failure order requests were executed again after remediation, and application metrics and logs remained operational.
+The corrected artifact was later built by Azure DevOps and published to private ACR using the full Git SHA:
 
-![Remediated container runtime validation](screenshots/02-docker/03-remediated-container-runtime-validation.png)
+    cce36ef47e07d29ce3e2641a0e7c0e15514da777
 
-## Immutable Versioning
+The final registry digest is:
 
-The original and remediated images were retained as separate local artifacts:
+    sha256:219ae166d3dccccd3c39d1212a18aec99bf6ef18bdc52340aa184d2bc6093f5da
 
-```text
-chay-demo-api:1.0.0
-chay-demo-api:1.0.1
-```
+## Evidence
 
-The original artifact was not overwritten. This provides a reproducible before-and-after security remediation trail and establishes the immutable versioning model that will later be used by the artifact repository and GitOps deployment workflow.
+Primary screenshots:
 
-## Engineering Outcome
+    docs/evidence/screenshots/02-docker/
+    ├── 01-docker-image-build-and-metadata.png
+    ├── 02-container-runtime-validation.png
+    ├── 03-remediated-container-runtime-validation.png
+    └── troubleshooting/
+        └── 01-docker-engine-500-error.png
 
-Container validation established that:
+The earlier named-user evidence is retained as implementation history.
 
-- The application builds reproducibly as a Docker image
-- The runtime executes as a non-root user
-- Health and application endpoints operate correctly in the container
-- Prometheus instrumentation remains available after containerization
-- Controlled application failures remain observable
-- A real Docker engine incident was isolated and recovered without modifying application code
-- Security remediation produced a separately versioned immutable image
-- The remediated image preserved expected runtime behavior
-
-The validated container artifact is ready to become an input to the CI security and artifact-management stages.
+The final platform state is the numeric UID/GID `10001:10001` configuration.

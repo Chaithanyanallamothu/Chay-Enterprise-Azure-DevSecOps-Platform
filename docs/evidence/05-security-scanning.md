@@ -1,329 +1,151 @@
-# Container Security Scanning and Remediation
+# 05 - Security Scanning and Remediation
 
-## Purpose
+**Author:** Chaithanya Nallamothu
+**Role:** Senior DevSecOps Engineer
 
-This evidence documents vulnerability detection, remediation, regression validation, and enforcement for the application container.
+## Objective
 
-The objective was not only to generate a vulnerability report, but to establish a security control that can later be enforced automatically in CI.
+Security scanning is integrated into the delivery workflow so actionable vulnerabilities are addressed before the production container is published.
 
-## Security Tooling
+Trivy is used for both dependency/source-oriented validation and final container validation.
 
-Container vulnerability analysis was performed with Trivy.
+## Blocking Policy
 
-Validated local version:
+The implemented blocking policy focuses on fixable:
 
-```text
-Trivy 0.74.0
-```
+    HIGH
+    CRITICAL
 
-The scan policy focused on fixable vulnerabilities with the following severities:
+findings.
 
-```text
-HIGH
-CRITICAL
-```
+Unfixed vulnerabilities are excluded from this particular automated blocking policy.
 
-Unfixed findings were excluded from the blocking policy so the gate focuses on vulnerabilities for which remediation is currently available.
+The purpose is to fail CI for actionable HIGH/CRITICAL findings for which a remediation is available.
 
-## Initial Scan
+## Initial Findings
 
-The original application image was:
+The initial image contained blocking findings in both the Debian OS layer and Python dependency layer.
 
-```text
-chay-demo-api:1.0.0
-```
+Initial result:
 
-The initial Trivy scan was executed with:
+    Debian HIGH:       9
+    Debian CRITICAL:   3
+    Python HIGH:       3
 
-```bash
-trivy image \
-  --severity HIGH,CRITICAL \
-  --ignore-unfixed \
-  chay-demo-api:1.0.0
-```
+    Total blocking:   15
 
-The scan identified blocking findings in both the Debian operating-system layer and the Python dependency layer.
+This was treated as a remediation requirement rather than accepting the initial container as the production baseline.
 
-### Debian Findings
+## Python Dependency Remediation
 
-The Debian image contained:
+The application dependency set was updated to patched versions.
 
-```text
-HIGH:      9
-CRITICAL:  3
-TOTAL:    12
-```
+The final application requirements include:
 
-Affected packages included:
+    fastapi==0.141.1
+    starlette==1.3.1
+    uvicorn[standard]==0.35.0
+    prometheus-client==0.22.1
+    pydantic==2.11.7
 
-```text
-gzip
-libpcre2-8-0
-libsqlite3-0
-perl-base
-```
+Development dependencies include:
 
-Trivy reported fixed package versions for these findings, making them actionable remediation candidates.
+    pytest==8.4.1
+    httpx==0.28.1
+    pytest-cov==6.2.1
+    ruff==0.12.10
 
-### Python Dependency Findings
+## OS-Layer Remediation
 
-The Python dependency scan identified three HIGH-severity findings associated with the installed Starlette version:
+The Docker build also updates the Debian package layer before installing application dependencies.
 
-```text
-Starlette 0.47.3
+This addressed fixable vulnerabilities inherited from the base image/package state.
 
-HIGH: 3
-```
+## Final Security Gate
 
-The findings had remediation versions available.
+After remediation, Trivy was executed with the same HIGH/CRITICAL blocking policy.
 
-Across the operating-system and Python layers, the original image therefore contained:
+Final result:
 
-```text
-HIGH:      12
-CRITICAL:   3
-TOTAL:     15 blocking findings
-```
+    Debian HIGH/CRITICAL: 0
+    Python HIGH/CRITICAL: 0
 
-## Dependency Remediation Analysis
+    Total blocking:       0
 
-The original application dependency set pinned:
+The gate returned a successful exit status.
 
-```text
-FastAPI  0.116.1
-Starlette 0.47.3 (resolved transitively)
-```
+## Regression After Security Changes
 
-Simply upgrading FastAPI was evaluated first.
+I did not treat the scanner result as proof that the application still worked.
 
-A pip dry-run showed that upgrading FastAPI alone could leave the existing Starlette `0.47.3` installation in place because it still satisfied FastAPI's dependency range.
+After remediation, the application was rebuilt and runtime validation was repeated.
 
-The remediation was therefore tested explicitly with:
+The remediated container continued to pass endpoint and application checks.
 
-```text
-FastAPI  0.141.1
-Starlette 1.3.1
-```
+## CI Integration
 
-The pip dependency resolver accepted this combination.
+Security scanning is integrated into Azure DevOps.
 
-![Dependency remediation dry run](screenshots/05-security/01-dependency-remediation-dry-run.png)
+The workflow contains security validation before artifact publication and an additional scan against the exact production image built on the private agent.
 
-## Dependency Regression Validation
+The production sequence is:
 
-The remediated dependency versions were installed locally and validated before changing the container artifact.
+    Build production image
+          |
+          v
+    Scan exact image
+          |
+          v
+    HIGH/CRITICAL gate
+          |
+          v
+    Push same image to private ACR
 
-The application requirements were updated to explicitly pin:
+The production artifact is not rebuilt between the final scan and publication.
 
-```text
-fastapi==0.141.1
-starlette==1.3.1
-```
+## Trivy Version
 
-Dependency consistency was checked with:
+The project validation used:
 
-```bash
-python -m pip check
-```
+    Trivy 0.74.0
 
-Result:
-
-```text
-No broken requirements found.
-```
-
-Application regression validation was then executed:
-
-```bash
-pytest -q
-ruff check src tests
-```
-
-Result:
-
-```text
-6 tests passed
-Ruff: All checks passed
-```
-
-The test run produced deprecation warnings from the FastAPI/Starlette test-client stack. These warnings did not represent test failures and are tracked separately from the vulnerability remediation.
-
-![Dependency remediation validation](screenshots/05-security/02-dependency-remediation-validation.png)
-
-## Base Image Analysis
-
-A fresh `python:3.12-slim` image was pulled before changing the Dockerfile.
-
-The refreshed base image resolved to:
-
-```text
-sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
-```
-
-Scanning the fresh base image still reported:
-
-```text
-Debian 13.6
-HIGH:      9
-CRITICAL:  3
-TOTAL:    12
-```
-
-This demonstrated that simply rebuilding against the refreshed upstream tag was insufficient to remediate the fixable operating-system vulnerabilities.
-
-## Operating-System Remediation
-
-The Docker build was updated to apply available Debian package updates:
-
-```dockerfile
-RUN apt-get update \
-    && apt-get upgrade -y \
-    && rm -rf /var/lib/apt/lists/*
-```
-
-The package metadata is removed in the same image layer after the upgrade.
-
-The application version was also incremented:
-
-```text
-1.0.0 -> 1.0.1
-```
-
-This preserved the original artifact and produced a separately identifiable remediated artifact.
-
-## Remediated Image Build
-
-The new image was built without using cached application layers:
-
-```bash
-docker build \
-  --pull \
-  --no-cache \
-  -t chay-demo-api:1.0.1 \
-  .
-```
-
-Image inspection confirmed:
-
-```text
-Image:        chay-demo-api:1.0.1
-Architecture: arm64
-User:         appuser
-APP_VERSION:  1.0.1
-```
-
-The original image remained available as:
-
-```text
-chay-demo-api:1.0.0
-```
-
-This provides an immutable before-and-after remediation trail.
-
-## Post-Remediation Vulnerability Scan
-
-The remediated image was scanned using the same HIGH/CRITICAL policy:
-
-```bash
-trivy image \
-  --scanners vuln \
-  --severity HIGH,CRITICAL \
-  --ignore-unfixed \
-  chay-demo-api:1.0.1
-```
-
-The remediated image was detected as Debian 13.7.
-
-Result:
-
-```text
-Debian HIGH/CRITICAL findings: 0
-Python HIGH/CRITICAL findings: 0
-TOTAL BLOCKING FINDINGS:       0
-```
-
-The remediation reduced the blocking vulnerability count from:
-
-```text
-15 -> 0
-```
-
-## Enforced Security Gate
-
-The final validation used Trivy's exit-code behavior so the same policy can block a CI pipeline:
-
-```bash
-trivy image \
-  --scanners vuln \
-  --severity HIGH,CRITICAL \
-  --ignore-unfixed \
-  --exit-code 1 \
-  chay-demo-api:1.0.1
-```
-
-Gate behavior:
-
-```text
-0 = security policy passed
-1 = blocking HIGH/CRITICAL vulnerability detected
-```
-
-For `chay-demo-api:1.0.1`, the gate completed successfully:
-
-```text
-HIGH findings:      0
-CRITICAL findings:  0
-TOTAL blocking:     0
-SECURITY GATE:      PASSED
-```
-
-![Remediated image security gate](screenshots/05-security/03-remediated-image-security-gate-passed.png)
-
-## Runtime Validation After Remediation
-
-Security remediation was followed by runtime validation rather than treating a clean scanner result as sufficient proof of application readiness.
-
-The `1.0.1` container was started and verified as:
-
-```text
-Image:   chay-demo-api:1.0.1
-User:    appuser
-Health:  healthy
-Version: 1.0.1
-```
-
-Successful and controlled-failure order requests were executed again. Prometheus metrics and application logs continued to report the expected behavior.
-
-Runtime evidence is maintained in:
-
-```text
-02-container-validation.md
-```
+Pinning the tool version makes the CI behavior more reproducible than silently changing scanner versions on every run.
 
 ## Security Outcome
 
-The remediation workflow established the following security controls:
+The important result is not simply that the final screenshot is green.
 
-- Vulnerability scanning covers both OS packages and Python dependencies
-- HIGH and CRITICAL fixable findings are treated as blocking conditions
-- Dependency remediation is regression-tested before image promotion
-- Base-image findings are validated independently from application dependencies
-- Remediation produces a new immutable image rather than overwriting the original artifact
-- The container continues to execute as a non-root user
-- Security changes are followed by functional runtime validation
-- Trivy exit codes provide an enforceable CI security gate
+The implementation demonstrates:
 
-## Before and After
+    Initial actionable findings
+          |
+          v
+    Identify affected layers
+          |
+          v
+    Remediate dependencies and OS packages
+          |
+          v
+    Re-run security policy
+          |
+          v
+    0 blocking findings
+          |
+          v
+    Re-run functional validation
 
-| Control | `1.0.0` | `1.0.1` |
-|---|---:|---:|
-| Debian HIGH | 9 | 0 |
-| Debian CRITICAL | 3 | 0 |
-| Python HIGH | 3 | 0 |
-| Total blocking findings | 15 | 0 |
-| Non-root runtime | Yes | Yes |
-| Regression tests | Baseline passed | 6 passed |
-| Ruff validation | Passed | Passed |
-| Security gate | Would block | Passed |
+## Evidence
 
-The same security policy will be integrated into Azure DevOps so vulnerable artifacts cannot progress to artifact publication or GitOps promotion.
+Screenshots under:
+
+    docs/evidence/screenshots/05-security/
+
+capture:
+
+- initial dependency/security remediation work
+- remediation validation
+- remediated image gate
+- Azure DevOps security stage
+- CI security gates
+
+The initial findings are retained because they explain the remediation rather than presenting only the final clean scan.

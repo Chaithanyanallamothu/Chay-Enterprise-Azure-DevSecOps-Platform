@@ -1,102 +1,128 @@
-# Local Development Validation
+# 01 - Local Development Validation
 
-## Purpose
+**Author:** Chaithanya Nallamothu
+**Role:** Senior DevSecOps Engineer
 
-This evidence validates the application locally before containerization and CI/CD integration. The goal was to establish a known-good baseline for application behavior, automated tests, code quality, and Prometheus instrumentation.
+## Objective
 
-## Runtime Standardization
+The first checkpoint was to establish a repeatable local development baseline before adding container, CI, security, and Kubernetes controls.
 
-The initial local environment used Python 3.14.7. During dependency installation, `pydantic-core` failed to build because the required PyO3 version did not support Python 3.14.
+The application is intentionally small. The purpose of the local validation was to prove that the API behavior, tests, linting, and Prometheus instrumentation were stable before moving into the delivery platform.
 
-To keep local development aligned with the container runtime, the project was standardized on Python 3.12.
+## Application
 
-The local virtual environment was recreated using:
+The FastAPI service exposes:
 
-```bash
-/opt/homebrew/bin/python3.12 -m venv .venv
-source .venv/bin/activate
-```
+    GET  /
+    GET  /health
+    GET  /ready
+    GET  /version
+    GET  /api/orders
+    POST /api/orders
+    GET  /metrics
 
-Validated runtime:
+The order endpoint supports controlled normal, slow, and failure behavior. These execution modes were later reused during observability, load testing, and autoscaling validation.
 
-```text
-Python 3.12.14
-```
+## Python Compatibility Incident
 
-This aligns local development with the application's `python:3.12-slim` container base.
+The first local environment used Python 3.14.7.
 
-## Automated Validation
+During dependency installation, `pydantic-core` failed because the required PyO3 compatibility did not align with the interpreter version being used.
 
-The application test suite covers:
+I treated this as a development-runtime compatibility problem rather than changing application behavior to work around the local interpreter.
 
-- Liveness endpoint
-- Readiness endpoint
-- Application version
-- Successful order processing
-- Controlled order-processing failure
-- Prometheus metrics endpoint
+The development environment was standardized on Homebrew Python 3.12.
 
-Validation commands:
+Validated interpreter:
 
-```bash
-pytest -v
-ruff check src tests
-```
+    Python 3.12.14
 
-Result:
+This also aligned local development with the Python 3.12 container runtime.
 
-```text
-6 tests passed
-Ruff: All checks passed
-```
+## Virtual Environment
 
-![Unit tests and lint validation](screenshots/01-local-development/01-unit-tests-and-lint-passed.png)
+A clean Python 3.12 virtual environment was created and dependencies were installed from the repository-controlled requirement files.
 
-## API Validation
+The final development dependency path uses:
 
-The FastAPI application was started locally with Uvicorn:
+    application/requirements.txt
+    application/requirements-dev.txt
 
-```bash
-uvicorn src.main:app --host 127.0.0.1 --port 8080
-```
+## Test Baseline
 
-The following endpoints were validated:
+The regression suite validates:
 
-```text
-GET  /health
-GET  /ready
-GET  /version
-GET  /api/orders
-POST /api/orders
-GET  /metrics
-```
+- liveness
+- readiness
+- application version
+- order retrieval
+- successful order creation
+- controlled failed-order behavior
+- Prometheus instrumentation
 
-The order API supports controlled `normal`, `slow`, and `fail` execution modes. These modes allow later load-testing, observability, autoscaling, and incident-recovery scenarios to generate measurable application behavior.
+Final local result:
 
-## Prometheus Instrumentation
+    6 tests passed
 
-Application-level metrics exposed through `/metrics` include:
+The test run produced two framework deprecation warnings associated with the FastAPI/Starlette test stack. They did not represent application test failures.
 
-```text
-chay_http_requests_total
-chay_http_request_duration_seconds
-chay_orders_created_total
-chay_orders_failed_total
-```
+## Linting
 
-Local validation generated both successful and failed order requests and confirmed that the corresponding counters were exported through the Prometheus endpoint.
+Ruff was used as the Python linting control.
 
-![API and Prometheus validation](screenshots/01-local-development/02-api-and-prometheus-validation.png)
+Final result:
+
+    Ruff passed
+
+Dependency consistency was also checked successfully.
+
+## Runtime Validation
+
+The API was started locally and validated through its HTTP endpoints.
+
+The validation confirmed:
+
+    /health     -> 200
+    /ready      -> 200
+    /version    -> 200
+    /metrics    -> Prometheus metrics available
+
+Application metrics include:
+
+    chay_http_requests_total
+    chay_http_request_duration_seconds
+    chay_orders_created_total
+    chay_orders_failed_total
 
 ## Engineering Outcome
 
-Before containerization, the application had a repeatable local baseline:
+The local checkpoint established:
 
-- Python runtime aligned with the container runtime
-- Automated regression tests passing
-- Static lint validation passing
-- Health and readiness endpoints operational
-- Successful and controlled-failure application paths validated
-- Prometheus instrumentation producing application metrics
+    Python 3.12 baseline
+        |
+        v
+    Dependency installation
+        |
+        v
+    Unit/regression tests
+        |
+        v
+    Ruff validation
+        |
+        v
+    API runtime validation
+        |
+        v
+    Prometheus metric validation
 
-This baseline is used by subsequent container, security, CI, GitOps, monitoring, load-testing, and incident-recovery stages.
+This became the application baseline used by the container and CI workflows.
+
+## Evidence
+
+Screenshots:
+
+    docs/evidence/screenshots/01-local-development/
+    ├── 01-unit-tests-and-lint-passed.png
+    └── 02-api-and-prometheus-validation.png
+
+These screenshots capture the validated development baseline rather than a reconstructed test performed after the platform was complete.

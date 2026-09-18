@@ -1,110 +1,144 @@
-# Azure Container Registry Artifact Publication Evidence
+# 06 - Azure Container Registry Artifact Validation
 
-**Author:** Chaithanya Nallamothu  
+**Author:** Chaithanya Nallamothu
 **Role:** Senior DevSecOps Engineer
 
 ## Objective
 
-The CI pipeline needs to produce a container artifact that can be promoted toward the private AKS environment without exposing the registry publicly or storing registry credentials in the pipeline.
+The artifact stage publishes a traceable, immutable production image to private Azure Container Registry only after the required validation succeeds.
 
-For this platform, Azure Container Registry is used as the OCI artifact registry. Images are published using the full Git commit SHA rather than a mutable `latest` tag.
+## Registry
 
-## Registry Security Model
+Registry:
 
-The existing Azure Container Registry is configured with public network access disabled and the administrator account disabled.
+    chaysecureapiprodacr.azurecr.io
 
-Artifact publication runs from the private Azure DevOps self-hosted agent. The agent VM authenticates to Azure using its system-assigned managed identity and has `AcrPush` scoped to the registry.
+Repository:
 
-AKS uses its own kubelet identity with `AcrPull`.
+    chay-enterprise-devsecops/demo-api
 
-This keeps build-time publication permissions separate from runtime image-pull permissions and avoids registry usernames or passwords in the CI pipeline.
+The registry is part of the existing private Azure platform.
 
-## Artifact Build and Security Gate
+## Artifact Naming
 
-The deployable container is built on the private Linux x64 Azure DevOps agent.
+The image tag is the complete Git commit SHA.
 
-The pipeline then runs Trivy against that exact image before publication. Fixable HIGH or CRITICAL vulnerabilities cause the task to fail, preventing the image from being pushed.
+Format:
 
-The successful path is:
+    chaysecureapiprodacr.azurecr.io/chay-enterprise-devsecops/demo-api:<Git-SHA>
 
-```text
-Git commit
-    |
-    v
-Application validation
-    |
-    v
-Source and dependency security gates
-    |
-    v
-Private Azure DevOps agent
-    |
-    v
-Production container build
-    |
-    v
-Trivy container vulnerability gate
-    |
-    v
-Managed identity authentication
-    |
-    v
-Private Azure Container Registry
-The container that passes the security gate is the same local image subsequently pushed to ACR; CI does not rebuild it between scanning and publication.
+The GitOps workload does not rely on `latest`.
 
-Immutable Artifact Identity
+## Publication Identity
 
-Pipeline run #20260916.6 successfully published the production candidate associated with Git commit:
+The private Azure DevOps agent authenticates through its system-assigned managed identity.
 
-3910d18757cfc07d839de69e078e0dcdc2b0780
+Publication permission:
 
-Published image:
+    AcrPush
 
-chaysecureapiprodacr.azurecr.io/chay-enterprise-devsecops/demo-api:3910d18757cfc07d839de69e078e0dcdc2b0780
+The pipeline does not require the ACR administrator account or registry username/password credentials.
 
-ACR resolved the published artifact to the OCI digest:
+## Runtime Pull Identity
 
-sha256:59ea968e1eee56320fd4db62fded9c3ef7342043a079d999dcd20463cd990f41
+AKS uses its kubelet identity for image consumption.
 
-The pipeline verifies that ACR returns a digest after the push. A missing digest is treated as a publication failure.
+Runtime permission:
 
-This gives the platform a traceable relationship between source revision, CI execution, container tag, and registry digest.
+    AcrPull
 
-Validation Result
+This separates the identity that publishes artifacts from the identity that consumes them.
 
-The artifact publication stage completed successfully on the private Azure DevOps agent.
+## Initial Artifact Evidence
 
-Validated controls included:
+An earlier successful artifact-publication checkpoint used commit:
 
-private-agent execution;
-managed-identity Azure authentication;
-private ACR authentication;
-immutable Git-SHA image tagging;
-Linux AMD64 container build;
-HIGH/CRITICAL container vulnerability gate;
-ACR publication;
-registry-side digest verification;
-private-agent cleanup after publication.
+    3910d18
 
-CI stops at artifact publication. It does not directly deploy the container to AKS. Runtime deployment will be controlled separately through GitOps and Argo CD.
+That artifact was valid at the time of the original CI evidence.
 
-Evidence
-Azure DevOps Artifact Pipeline
+Later, during GitOps validation, the exact older immutable tag referenced by the desired state was no longer present in ACR.
 
-The pipeline run shows Application Validation, Security Validation, and Build/Scan/Publish Artifact completing successfully.
+That became a real recovery incident and is documented separately.
 
-Immutable ACR Artifact Verification
+The old artifact should therefore be understood as historical pipeline evidence rather than the current runtime artifact.
 
-The final verification task records the Git commit SHA, full ACR image reference, and immutable OCI digest returned by the registry.
+## Final Runtime Artifact
 
-Engineering Outcome
+The final Kubernetes non-root remediation produced commit:
 
-At this checkpoint the CI boundary is complete:
+    cce36ef47e07d29ce3e2641a0e7c0e15514da777
 
-Source -> Quality -> Security -> Build -> Scan -> Private ACR
+Final image:
 
-Deployment responsibility remains outside CI. The next platform boundary is:
+    chaysecureapiprodacr.azurecr.io/chay-enterprise-devsecops/demo-api:cce36ef47e07d29ce3e2641a0e7c0e15514da777
 
-GitOps desired state -> Argo CD -> AKS
+Validated digest:
 
-This separation allows CI to establish whether an artifact is safe and publishable while GitOps independently controls what version is allowed to run in the cluster.
+    sha256:219ae166d3dccccd3c39d1212a18aec99bf6ef18bdc52340aa184d2bc6093f5da
+
+This is the immutable artifact referenced by the final Helm desired state.
+
+## Build-Scan-Push Integrity
+
+The artifact stage follows:
+
+    Git SHA
+      |
+      v
+    Build production image once
+      |
+      v
+    Trivy scan exact local image
+      |
+      v
+    Security gate passes
+      |
+      v
+    Push same image
+      |
+      v
+    Query ACR digest
+
+The production image is not rebuilt after the final container security scan.
+
+## Private Registry Behavior
+
+The developer laptop is not used as the authoritative ACR data-plane validation path because the registry is private.
+
+Registry validation is performed from the private Azure environment through the self-hosted agent.
+
+This is consistent with the platform's network design.
+
+## Engineering Outcome
+
+The artifact model provides traceability across:
+
+    Git commit
+        |
+        v
+    Azure DevOps build
+        |
+        v
+    ACR image tag
+        |
+        v
+    ACR digest
+        |
+        v
+    Helm desired state
+        |
+        v
+    AKS workload
+
+## Evidence
+
+Screenshots:
+
+    docs/evidence/screenshots/06-acr/
+    ├── 01-azure-devops-acr-publish-pipeline-passed.png
+    └── 02-acr-immutable-artifact-digest-verified.png
+
+The screenshots capture the artifact-publication control.
+
+The final runtime artifact identity is documented above so the evidence is not misread as claiming the earlier `3910d18` artifact is still the deployed image.
