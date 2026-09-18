@@ -241,7 +241,7 @@ steps:
       echo "HPA current replicas: ${HPA_CURRENT}"
       echo "HPA desired replicas: ${HPA_DESIRED}"
 
-      if [ "$HPA_MIN" != "1" ] ||          [ "$HPA_MAX" != "3" ] ||          [ "$HPA_TARGET" != "50" ]; then
+      if [ "$HPA_MIN" != "1" ] ||          [ "$HPA_MAX" != "3" ] ||          [ "$HPA_TARGET" != "30" ]; then
         echo "ERROR: Live HPA configuration does not match GitOps desired state."
         exit 1
       fi
