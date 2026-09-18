@@ -85,6 +85,70 @@ spec:
 
               print("PASS: Prometheus target chay-demo-api = UP (1)")
 
+              print("\n=== Prometheus Runtime Metrics ===")
+
+              def prom_query(expression):
+                  encoded = urllib.parse.quote(expression)
+                  body = get(f"{PROMETHEUS}/api/v1/query?query={encoded}")
+                  payload = json.loads(body)
+
+                  if payload.get("status") != "success":
+                      raise RuntimeError(
+                          f"Prometheus query failed: {expression}"
+                      )
+
+                  return payload.get("data", {}).get("result", [])
+
+              def print_metric(label, expression):
+                  metric_results = prom_query(expression)
+
+                  if not metric_results:
+                      print(f"{label}: no data")
+                      return
+
+                  values = [
+                      item.get("value", [None, "unknown"])[1]
+                      for item in metric_results
+                  ]
+
+                  print(f"{label}: {', '.join(values)}")
+
+              print_metric(
+                  "Total HTTP requests",
+                  "sum(chay_http_requests_total)"
+              )
+
+              print_metric(
+                  "Current request rate",
+                  "sum(rate(chay_http_requests_total[5m]))"
+              )
+
+              print_metric(
+                  "P95 request latency",
+                  "histogram_quantile(0.95, "
+                  "sum(rate(chay_http_request_duration_seconds_bucket[5m])) "
+                  "by (le))"
+              )
+
+              print_metric(
+                  "P99 request latency",
+                  "histogram_quantile(0.99, "
+                  "sum(rate(chay_http_request_duration_seconds_bucket[5m])) "
+                  "by (le))"
+              )
+
+              print_metric(
+                  "Orders created",
+                  "sum(chay_orders_created_total)"
+              )
+
+              print_metric(
+                  "Orders failed",
+                  "sum(chay_orders_failed_total)"
+              )
+
+              print("\nPASS: Prometheus runtime metrics queried successfully")
+
               print("\n=== Grafana Health Validation ===")
               grafana_health = get(f"{GRAFANA}/api/health")
               print(grafana_health)
