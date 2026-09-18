@@ -185,6 +185,27 @@ spec:
                   "Chay Demo API - Runtime Observability"
               )
 
+              print("\n=== Grafana Dashboard HTTP Validation ===")
+
+              dashboard_url = (
+                  f"{GRAFANA}/d/chay-demo-api/"
+                  "chay-demo-api-runtime-observability"
+                  "?orgId=1&kiosk"
+              )
+
+              dashboard_html = get(dashboard_url)
+
+              if not dashboard_html:
+                  raise RuntimeError(
+                      "Grafana dashboard returned an empty response"
+                  )
+
+              print(f"Dashboard URL: {dashboard_url}")
+              print(
+                  "PASS: Grafana dashboard frontend is reachable "
+                  "from private AKS"
+              )
+
               print("\n========================================")
               print("MONITORING VALIDATION: PASSED")
               print("Application health: PASS")
