@@ -158,6 +158,42 @@ steps:
       kubectl rollout status deployment/grafana         -n monitoring         --timeout=180s
 
       echo
+      echo "=== In-Cluster Monitoring Validation ==="
+
+      echo "Waiting for monitoring-validator deployment..."
+
+      kubectl rollout status deployment/monitoring-validator         -n monitoring         --timeout=180s
+
+      echo
+      echo "Monitoring validator pod:"
+      kubectl get pods         -n monitoring         -l app=monitoring-validator         -o wide
+
+      echo
+      echo "=== Monitoring Validator Results ==="
+
+      VALIDATOR_LOGS=$(kubectl logs         -n monitoring         deployment/monitoring-validator)
+
+      echo "$VALIDATOR_LOGS"
+
+      echo "$VALIDATOR_LOGS" | grep -q         "MONITORING VALIDATION: PASSED" || {
+          echo "ERROR: Monitoring validator did not report PASSED."
+          exit 1
+        }
+
+      echo "$VALIDATOR_LOGS" | grep -q         "Prometheus scrape target: UP" || {
+          echo "ERROR: Prometheus scrape validation was not successful."
+          exit 1
+        }
+
+      echo "$VALIDATOR_LOGS" | grep -q         "Grafana dashboard provisioning: PASS" || {
+          echo "ERROR: Grafana dashboard validation was not successful."
+          exit 1
+        }
+
+      echo
+      echo "In-cluster monitoring validation: PASSED"
+
+      echo
       echo "=== Runtime Readiness Summary ==="
 
       APP_AVAILABLE=$(kubectl get deployment "$(applicationName)"         -n "$(applicationNamespace)"         -o jsonpath='{.status.availableReplicas}')
