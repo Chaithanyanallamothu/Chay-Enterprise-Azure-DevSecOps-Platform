@@ -1,5 +1,9 @@
 # Author: Chaithanya Nallamothu
 # Role: Senior DevSecOps Engineer
+#
+# One-time evidence workflow.
+# Retrieves the Grafana screenshot generated inside private AKS and
+# publishes the PNG as an Azure DevOps pipeline artifact.
 
 trigger: none
 pr: none
@@ -20,7 +24,12 @@ steps:
   - bash: |
       set -euo pipefail
 
-      echo "=== PRIVATE AKS GRAFANA SCREENSHOT RETRIEVAL ==="
+      cleanup() {
+        az logout >/dev/null 2>&1 || true
+      }
+      trap cleanup EXIT
+
+      echo "=== PRIVATE GRAFANA EVIDENCE RETRIEVAL ==="
 
       az login --identity --output none
       az account set --subscription "$(azureSubscriptionId)"
@@ -33,52 +42,97 @@ steps:
       kubelogin convert-kubeconfig -l azurecli
 
       echo
-      echo "=== Screenshot workload diagnostics ==="
+      echo "Waiting for screenshot capture workload..."
 
-      kubectl get deployment grafana-screenshot-capture -n monitoring -o wide || true
+      for attempt in $(seq 1 30); do
+        LOGS="$(kubectl logs \
+          -n monitoring \
+          deployment/grafana-screenshot-capture \
+          2>/dev/null || true)"
 
-      kubectl get pods         -n monitoring         -l app=grafana-screenshot-capture         -o wide || true
+        if printf '%s\n' "$LOGS" | grep -q \
+          "GRAFANA SCREENSHOT CAPTURE: PASSED"; then
+          echo "Screenshot capture completed."
+          break
+        fi
 
-      echo
-      echo "=== Pod status ==="
-      kubectl get pods         -n monitoring         -l app=grafana-screenshot-capture         -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[0].ready,WAITING:.status.containerStatuses[0].state.waiting.reason,RESTARTS:.status.containerStatuses[0].restartCount'         || true
-
-      echo
-      echo "=== Recent pod events ==="
-      kubectl describe pods         -n monitoring         -l app=grafana-screenshot-capture         | tail -80 || true
-
-      echo
-      echo "=== Container logs ==="
-      kubectl logs         -n monitoring         -l app=grafana-screenshot-capture         --tail=100 || true
-
-      echo
-      echo "=== End diagnostics ==="
-      exit 1
-
-      echo
-      echo "Screenshot workload:"
-      kubectl get pods \
-        -n monitoring \
-        -l app=grafana-screenshot-capture \
-        -o wide
-
-      echo
-      echo "=== GRAFANA SCREENSHOT DATA ==="
-
-      LOGS="$(kubectl logs \
-        -n monitoring \
-        deployment/grafana-screenshot-capture)"
-
-      echo "$LOGS"
-
-      echo "$LOGS" | grep -q \
-        "GRAFANA SCREENSHOT CAPTURE: PASSED" || {
-          echo "ERROR: Grafana screenshot capture did not complete."
+        if [ "$attempt" -eq 30 ]; then
+          echo "ERROR: Screenshot capture did not complete."
+          kubectl get pods \
+            -n monitoring \
+            -l app=grafana-screenshot-capture \
+            -o wide || true
           exit 1
-        }
+        fi
+
+        sleep 5
+      done
+
+      mkdir -p "$(Build.ArtifactStagingDirectory)/grafana"
+
+      printf '%s\n' "$LOGS" > "$(Agent.TempDirectory)/grafana-capture.log"
+
+      python3 - <<'PY'
+      from pathlib import Path
+      import base64
+      import re
+      import os
+
+      log = Path(os.environ["AGENT_TEMPDIRECTORY"]) / "grafana-capture.log"
+      output = (
+          Path(os.environ["BUILD_ARTIFACTSTAGINGDIRECTORY"])
+          / "grafana"
+          / "07-grafana-runtime-dashboard.png"
+      )
+
+      text = log.read_text(errors="replace")
+
+      end_marker = "GRAFANA_PNG_BASE64_END"
+
+      if end_marker not in text:
+          raise SystemExit("ERROR: Screenshot end marker not found.")
+
+      before_end = text.rsplit(end_marker, 1)[0]
+
+      # Locate the PNG Base64 signature produced by the capture container.
+      start = before_end.rfind("iVBORw0KGgo")
+
+      if start == -1:
+          raise SystemExit("ERROR: PNG Base64 signature not found.")
+
+      block = before_end[start:]
+
+      payload = "".join(
+          line.strip()
+          for line in block.splitlines()
+          if re.fullmatch(r"[A-Za-z0-9+/=]+", line.strip())
+      )
+
+      payload += "=" * (-len(payload) % 4)
+
+      image = base64.b64decode(payload, validate=True)
+
+      if not image.startswith(b"\x89PNG\r\n\x1a\n"):
+          raise SystemExit("ERROR: Decoded artifact is not a PNG.")
+
+      output.write_bytes(image)
+
+      print(f"PNG artifact: {output}")
+      print(f"PNG bytes: {len(image):,}")
+      print("PNG validation: PASSED")
+      PY
+
+      file \
+        "$(Build.ArtifactStagingDirectory)/grafana/07-grafana-runtime-dashboard.png"
 
       echo
-      echo "Grafana screenshot retrieval: PASSED"
+      echo "GRAFANA EVIDENCE RETRIEVAL: PASSED"
 
-      az logout
-    displayName: 'Retrieve private Grafana dashboard screenshot'
+    displayName: 'Retrieve Grafana screenshot from private AKS'
+
+  - task: PublishPipelineArtifact@1
+    displayName: 'Publish Grafana dashboard evidence'
+    inputs:
+      targetPath: '$(Build.ArtifactStagingDirectory)/grafana'
+      artifact: 'grafana-dashboard-evidence'
+      publishLocation: 'pipeline'
