@@ -41,3 +41,9 @@ securityContext:
     drop:
       - ALL
   readOnlyRootFilesystem: true
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 50
