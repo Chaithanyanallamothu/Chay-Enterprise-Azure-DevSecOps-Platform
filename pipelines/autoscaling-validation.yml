@@ -44,13 +44,33 @@ steps:
         -n "$(applicationNamespace)" -o wide
 
       echo
-      echo "Waiting for k6 autoscaling workload..."
-      kubectl rollout status deployment/k6-autoscaling \
-        -n monitoring \
-        --timeout=180s
+      echo "Waiting for Argo CD to create k6 autoscaling workload..."
 
-      MAX_REPLICAS_SEEN=0
-      SCALE_OUT_SEEN=false
+      K6_FOUND=false
+
+      for ATTEMPT in $(seq 1 18); do
+        if kubectl get deployment k6-autoscaling           -n monitoring           >/dev/null 2>&1; then
+          echo "k6-autoscaling deployment discovered."
+          K6_FOUND=true
+          break
+        fi
+
+        echo "Attempt ${ATTEMPT}/18: deployment not created yet; waiting 10s..."
+        sleep 10
+      done
+
+      if [ "$K6_FOUND" != "true" ]; then
+        echo "ERROR: k6-autoscaling was not created within 180 seconds."
+        exit 1
+      fi
+
+      echo
+      echo "Waiting for k6 autoscaling workload to become available..."
+
+      kubectl rollout status deployment/k6-autoscaling         -n monitoring         --timeout=180s
+
+      echo
+      kubectl get deployment k6-autoscaling         -n monitoring         -o wide
 
       echo
       echo "=== Observe HPA During Load ==="
