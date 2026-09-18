@@ -219,6 +219,41 @@ steps:
       echo "k6 private AKS baseline validation: PASSED"
 
       echo
+      echo "=== HPA and Metrics Validation ==="
+
+      echo "Horizontal Pod Autoscaler:"
+      kubectl get hpa chay-demo-api         -n "$(applicationNamespace)"         -o wide
+
+      HPA_MIN=$(kubectl get hpa chay-demo-api         -n "$(applicationNamespace)"         -o jsonpath='{.spec.minReplicas}')
+
+      HPA_MAX=$(kubectl get hpa chay-demo-api         -n "$(applicationNamespace)"         -o jsonpath='{.spec.maxReplicas}')
+
+      HPA_TARGET=$(kubectl get hpa chay-demo-api         -n "$(applicationNamespace)"         -o jsonpath='{.spec.metrics[0].resource.target.averageUtilization}')
+
+      HPA_CURRENT=$(kubectl get hpa chay-demo-api         -n "$(applicationNamespace)"         -o jsonpath='{.status.currentReplicas}')
+
+      HPA_DESIRED=$(kubectl get hpa chay-demo-api         -n "$(applicationNamespace)"         -o jsonpath='{.status.desiredReplicas}')
+
+      echo
+      echo "HPA min replicas: ${HPA_MIN}"
+      echo "HPA max replicas: ${HPA_MAX}"
+      echo "HPA CPU target: ${HPA_TARGET}%"
+      echo "HPA current replicas: ${HPA_CURRENT}"
+      echo "HPA desired replicas: ${HPA_DESIRED}"
+
+      if [ "$HPA_MIN" != "1" ] ||          [ "$HPA_MAX" != "3" ] ||          [ "$HPA_TARGET" != "50" ]; then
+        echo "ERROR: Live HPA configuration does not match GitOps desired state."
+        exit 1
+      fi
+
+      echo
+      echo "Application pod CPU metrics:"
+      kubectl top pods         -n "$(applicationNamespace)"         -l app.kubernetes.io/name=chay-demo-api
+
+      echo
+      echo "HPA and metrics-server validation: PASSED"
+
+      echo
       echo "=== Runtime Readiness Summary ==="
 
       APP_AVAILABLE=$(kubectl get deployment "$(applicationName)"         -n "$(applicationNamespace)"         -o jsonpath='{.status.availableReplicas}')
