@@ -1,0 +1,68 @@
+# Author: Chaithanya Nallamothu
+# Role: Senior DevSecOps Engineer
+
+trigger: none
+pr: none
+
+pool:
+  name: Private-Azure-Agent-Pool
+  demands:
+    - Agent.Name -equals chay-secure-api-prod-agent-01
+
+variables:
+  azureSubscriptionId: 'c514ee69-6634-4342-8a48-9c00338e71aa'
+  aksResourceGroup: 'chay-secure-api-prod-rg'
+  aksClusterName: 'chay-secure-api-prod-aks'
+
+steps:
+  - checkout: self
+
+  - bash: |
+      set -euo pipefail
+
+      echo "=== PRIVATE AKS GRAFANA SCREENSHOT RETRIEVAL ==="
+
+      az login --identity --output none
+      az account set --subscription "$(azureSubscriptionId)"
+
+      az aks get-credentials \
+        --resource-group "$(aksResourceGroup)" \
+        --name "$(aksClusterName)" \
+        --overwrite-existing
+
+      kubelogin convert-kubeconfig -l azurecli
+
+      echo
+      echo "Waiting for screenshot workload..."
+      kubectl rollout status \
+        deployment/grafana-screenshot-capture \
+        -n monitoring \
+        --timeout=240s
+
+      echo
+      echo "Screenshot workload:"
+      kubectl get pods \
+        -n monitoring \
+        -l app=grafana-screenshot-capture \
+        -o wide
+
+      echo
+      echo "=== GRAFANA SCREENSHOT DATA ==="
+
+      LOGS="$(kubectl logs \
+        -n monitoring \
+        deployment/grafana-screenshot-capture)"
+
+      echo "$LOGS"
+
+      echo "$LOGS" | grep -q \
+        "GRAFANA SCREENSHOT CAPTURE: PASSED" || {
+          echo "ERROR: Grafana screenshot capture did not complete."
+          exit 1
+        }
+
+      echo
+      echo "Grafana screenshot retrieval: PASSED"
+
+      az logout
+    displayName: 'Retrieve private Grafana dashboard screenshot'
