@@ -1,0 +1,63 @@
+# Author: Chaithanya Nallamothu
+# Role: Senior DevSecOps Engineer
+#
+# Controlled one-time authorization change for the Argo CD project.
+# Azure RBAC elevation is granted externally only for this execution
+# and revoked immediately after successful validation.
+
+trigger: none
+pr: none
+
+pool:
+  name: Private-Azure-Agent-Pool
+  demands:
+    - Agent.Name -equals chay-secure-api-prod-agent-01
+
+variables:
+  subscriptionId: c514ee69-6634-4342-8a48-9c00338e71aa
+  resourceGroup: chay-secure-api-prod-rg
+  aksName: chay-secure-api-prod-aks
+
+steps:
+  - checkout: self
+
+  - bash: |
+      set -euo pipefail
+
+      echo "=== Authenticate With Azure Managed Identity ==="
+      az login --identity --output none
+      az account set --subscription "$(subscriptionId)"
+
+      echo "=== Connect To Private AKS ==="
+      az aks get-credentials \
+        --resource-group "$(resourceGroup)" \
+        --name "$(aksName)" \
+        --overwrite-existing
+
+      kubelogin convert-kubeconfig -l azurecli
+
+      echo "=== Apply Controlled Argo CD Project Authorization ==="
+      kubectl apply -f argocd/project.yaml
+
+      echo
+      echo "=== Verify HPA Resource Authorization ==="
+
+      HPA_PERMISSION=$(kubectl get appproject \
+        chay-enterprise-devsecops \
+        -n argocd \
+        -o jsonpath='{range .spec.namespaceResourceWhitelist[*]}{.group}{"/"}{.kind}{"\n"}{end}' \
+        | grep '^autoscaling/HorizontalPodAutoscaler$' || true)
+
+      if [ "$HPA_PERMISSION" != "autoscaling/HorizontalPodAutoscaler" ]; then
+        echo "ERROR: HPA authorization is not present in the live Argo CD project."
+        exit 1
+      fi
+
+      echo "$HPA_PERMISSION"
+      echo
+      echo "Argo CD HPA authorization: PASSED"
+
+      echo
+      echo "=== Authorization Update Complete ==="
+
+    displayName: Apply HPA authorization to Argo CD project
