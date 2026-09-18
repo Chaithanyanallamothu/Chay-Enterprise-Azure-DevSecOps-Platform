@@ -1,6 +1,6 @@
 # Security Model
 
-**Author:** Chaithanya Nallamothu  
+**Author:** Chaithanya Nallamothu
 **Role:** Senior DevSecOps Engineer
 
 ## Scope

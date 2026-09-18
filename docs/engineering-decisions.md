@@ -1,6 +1,6 @@
 # Engineering Decisions
 
-**Author:** Chaithanya Nallamothu  
+**Author:** Chaithanya Nallamothu
 **Role:** Senior DevSecOps Engineer
 
 ## Purpose
