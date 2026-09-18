@@ -36,7 +36,6 @@ The repository currently includes:
 - Least-privilege AKS validation
 - Engineering evidence captured during implementation
 
-The remaining work is mainly documentation consolidation, final architecture diagrams, and final repository review.
 
 ---
 
@@ -1217,26 +1216,35 @@ See:
 
 ## Evidence Documentation
 
-Current detailed evidence documents:
+The repository contains a numbered validation record covering the complete implementation lifecycle:
 
-- [Local Development Validation](docs/evidence/01-local-development.md)
-- [Container Build and Runtime Validation](docs/evidence/02-container-validation.md)
-- [Container Security Scanning and Remediation](docs/evidence/05-security-scanning.md)
-- [Azure Container Registry Artifact Publication](docs/evidence/06-acr-artifact.md)
+- [01 - Local Development Validation](docs/evidence/01-local-development.md)
+- [02 - Container Build and Runtime Validation](docs/evidence/02-container-validation.md)
+- [03 - Azure DevOps CI Validation](docs/evidence/03-azure-devops-ci.md)
+- [04 - SonarQube Cloud Quality Gate](docs/evidence/04-sonarqube-quality-gate.md)
+- [05 - Security Scanning and Remediation](docs/evidence/05-security-scanning.md)
+- [06 - Azure Container Registry Artifact Validation](docs/evidence/06-acr-artifact.md)
+- [07 - Argo CD GitOps Validation](docs/evidence/07-argocd-gitops.md)
+- [08 - Private AKS Deployment Validation](docs/evidence/08-aks-deployment.md)
+- [09 - Runtime Observability Validation](docs/evidence/09-observability.md)
+- [10 - k6 Baseline Load Testing](docs/evidence/10-k6-load-testing.md)
+- [11 - HPA Autoscaling Validation](docs/evidence/11-hpa-autoscaling.md)
+- [12 - Incident and Recovery Validation](docs/evidence/12-incident-recovery.md)
 
-Additional implementation evidence is already captured in screenshots and will be consolidated into dedicated documentation for:
+The evidence record preserves successful validation as well as the real implementation failures and recovery decisions that influenced the final platform.
 
-- Azure DevOps CI
-- SonarQube
-- GitOps
-- AKS runtime
-- monitoring
-- load testing
-- autoscaling
-- incident recovery
+Operational references:
 
----
+- [Operations Runbook](docs/operations-runbook.md)
+- [Incident Recovery Guide](docs/incident-recovery.md)
+- [Platform Architecture](docs/architecture.md)
+- [Engineering Decisions](docs/engineering-decisions.md)
+- [Security Model](docs/security-model.md)
 
+Architecture diagrams:
+
+- [End-to-End Platform Architecture](docs/diagrams/platform-architecture.md)
+- [CI, Artifact and GitOps Flow](docs/diagrams/ci-gitops-flow.md)
 ## Key Validation Results
 
 Application:
@@ -1319,101 +1327,38 @@ The repository includes both the final configuration and the reasoning/evidence 
 
 ---
 
-## Documentation Roadmap
+## Documentation
 
-The remaining documentation work will consolidate the implementation into:
+The repository documentation is organized around four layers:
 
-    docs/architecture.md
-    docs/engineering-decisions.md
-    docs/security-model.md
-    docs/operations-runbook.md
+    Architecture and Decisions
+        |
+        v
+    Security and Operations
+        |
+        v
+    Numbered Validation Evidence
+        |
+        v
+    Incident and Recovery History
 
-and evidence documents for:
+Core engineering documents:
 
-    01 - Local Development
-    02 - Container Validation
-    03 - Azure DevOps CI
-    04 - SonarQube Quality Validation
-    05 - Security Scanning
-    06 - ACR Artifact Publication
-    07 - Argo CD / GitOps
-    08 - AKS Runtime
-    09 - Observability
-    10 - k6 Load Testing
-    11 - HPA Autoscaling
-    12 - Incident and Recovery
+- [Platform Architecture](docs/architecture.md)
+- [Engineering Decisions](docs/engineering-decisions.md)
+- [Security Model](docs/security-model.md)
+- [Operations Runbook](docs/operations-runbook.md)
+- [Incident Recovery Guide](docs/incident-recovery.md)
 
-The final documentation pass will also add architecture diagrams based on the platform that was actually implemented rather than generic reference architecture diagrams.
-
----
-
+The numbered evidence record under `docs/evidence/` preserves the implementation and validation sequence from local development through CI, security, artifact publication, GitOps, private AKS, observability, load testing, autoscaling, and recovery.
 ## Architecture Diagrams
 
-The final diagrams will be maintained under:
+Two version-controlled Mermaid diagrams document the implemented platform:
 
-    docs/diagrams/
+- [End-to-End Platform Architecture](docs/diagrams/platform-architecture.md)
+- [CI, Artifact and GitOps Flow](docs/diagrams/ci-gitops-flow.md)
 
-The primary architecture diagram will show:
-
-    Developer
-        |
-        v
-    GitHub
-        |
-        v
-    Azure DevOps
-        |
-        +--> Tests
-        +--> SonarQube
-        +--> Trivy
-        |
-        v
-    Private Build Agent
-        |
-        v
-    Private ACR
-        |
-        v
-    GitOps
-        |
-        v
-    Argo CD
-        |
-        v
-    Private AKS
-        |
-        +--> Application
-        +--> HPA
-        +--> Prometheus
-        +--> Grafana
-        +--> k6
-
-A second diagram can show the security and trust boundaries:
-
-    Developer / Source
-           |
-           v
-    CI Quality & Security
-           |
-           v
-    Private Build Boundary
-           |
-           v
-    Artifact Boundary
-           |
-           v
-    GitOps Deployment Boundary
-           |
-           v
-    Private Runtime Boundary
-           |
-           v
-    Observability Boundary
-
-These diagrams will be created from the actual implementation using Miro or Lucidchart rather than using a generic cloud architecture template.
-
----
-
+The diagrams reflect the implemented responsibility boundaries: Azure DevOps owns CI and artifact validation, Argo CD owns deployment reconciliation, AKS runs the private workload, and Prometheus/Grafana provide runtime observability.
 ## Final Note
 
 This project evolved while I was building it.
