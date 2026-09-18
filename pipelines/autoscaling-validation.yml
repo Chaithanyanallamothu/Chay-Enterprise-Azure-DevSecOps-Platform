@@ -73,6 +73,9 @@ steps:
       kubectl get deployment k6-autoscaling         -n monitoring         -o wide
 
       echo
+      MAX_REPLICAS_SEEN=0
+      SCALE_OUT_SEEN=false
+
       echo "=== Observe HPA During Load ==="
 
       for i in $(seq 1 24); do
