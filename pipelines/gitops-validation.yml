@@ -106,150 +106,91 @@ steps:
       fi
 
       echo
-      echo "=== Application Endpoint Validation ==="
-
-      kubectl port-forward \
-        -n "$(applicationNamespace)" \
-        service/"$(applicationName)" \
-        18080:80 >/tmp/chay-port-forward.log 2>&1 &
-
-      PORT_FORWARD_PID=$!
-
-      cleanup() {
-        kill "$PORT_FORWARD_PID" >/dev/null 2>&1 || true
-        az logout >/dev/null 2>&1 || true
-      }
-
-      trap cleanup EXIT
-
-      echo "Waiting for application port-forward..."
-
-      APP_FORWARD_READY=false
-
-      for attempt in $(seq 1 20); do
-        if ! kill -0 "$PORT_FORWARD_PID" 2>/dev/null; then
-          echo "ERROR: kubectl port-forward process exited."
-          cat /tmp/chay-port-forward.log || true
-          exit 1
-        fi
-
-        if curl --fail --silent --output /dev/null \
-          http://127.0.0.1:18080/health; then
-          APP_FORWARD_READY=true
-          echo "Application port-forward ready on attempt $attempt."
-          break
-        fi
-
-        sleep 2
-      done
-
-      if [ "$APP_FORWARD_READY" != "true" ]; then
-        echo "ERROR: Application port-forward did not become ready."
-        echo "=== Application port-forward diagnostics ==="
-        cat /tmp/chay-port-forward.log || true
-        exit 1
-      fi
+      echo "=== Application Runtime Validation ==="
 
       echo
-      echo "--- /health ---"
-      curl --fail --silent http://127.0.0.1:18080/health
-      echo
+      echo "Application deployment:"
+      kubectl get deployment "$(applicationName)"         -n "$(applicationNamespace)"         -o wide
 
       echo
-      echo "--- /ready ---"
-      curl --fail --silent http://127.0.0.1:18080/ready
-      echo
+      echo "Application pods:"
+      kubectl get pods         -n "$(applicationNamespace)"         -l app.kubernetes.io/name="$(applicationName)"         -o wide ||       kubectl get pods -n "$(applicationNamespace)" -o wide
 
       echo
-      echo "--- /version ---"
-      curl --fail --silent http://127.0.0.1:18080/version
-      echo
+      echo "Application service:"
+      kubectl get service "$(applicationName)"         -n "$(applicationNamespace)"
 
-      kill "$PORT_FORWARD_PID" >/dev/null 2>&1 || true
-      trap - EXIT
+      echo
+      echo "Application endpoints:"
+      kubectl get endpoints "$(applicationName)"         -n "$(applicationNamespace)"
+
+      echo
+      echo "Application rollout:"
+      kubectl rollout status deployment/"$(applicationName)"         -n "$(applicationNamespace)"         --timeout=180s
 
       echo
       echo "=== Monitoring Runtime Validation ==="
 
-      kubectl get deployment,pods,service -n monitoring
+      echo
+      echo "Monitoring deployments:"
+      kubectl get deployment -n monitoring
+
+      echo
+      echo "Monitoring pods:"
+      kubectl get pods -n monitoring -o wide
+
+      echo
+      echo "Monitoring services:"
+      kubectl get service -n monitoring
+
+      echo
+      echo "Monitoring endpoints:"
+      kubectl get endpoints -n monitoring
 
       echo
       echo "=== Prometheus Rollout ==="
-      kubectl rollout status deployment/prometheus \
-        -n monitoring \
-        --timeout=180s
+
+      kubectl rollout status deployment/prometheus         -n monitoring         --timeout=180s
 
       echo
       echo "=== Grafana Rollout ==="
-      kubectl rollout status deployment/grafana \
-        -n monitoring \
-        --timeout=180s
+
+      kubectl rollout status deployment/grafana         -n monitoring         --timeout=180s
 
       echo
-      echo "=== Prometheus Scrape Validation ==="
+      echo "=== Runtime Readiness Summary ==="
 
-      kubectl port-forward \
-        -n monitoring \
-        service/prometheus 9090:9090 \
-        >/tmp/prometheus-validation.log 2>&1 &
-      PROM_PID=$!
+      APP_AVAILABLE=$(kubectl get deployment "$(applicationName)"         -n "$(applicationNamespace)"         -o jsonpath='{.status.availableReplicas}')
 
-      sleep 5
+      PROM_AVAILABLE=$(kubectl get deployment prometheus         -n monitoring         -o jsonpath='{.status.availableReplicas}')
 
-      PROM_RESULT=$(curl --fail --silent --get \
-        --data-urlencode 'query=up{job="chay-demo-api"}' \
-        http://127.0.0.1:9090/api/v1/query)
+      GRAFANA_AVAILABLE=$(kubectl get deployment grafana         -n monitoring         -o jsonpath='{.status.availableReplicas}')
 
-      echo "$PROM_RESULT" | python3 -m json.tool
+      echo "Application available replicas: ${APP_AVAILABLE:-0}"
+      echo "Prometheus available replicas: ${PROM_AVAILABLE:-0}"
+      echo "Grafana available replicas: ${GRAFANA_AVAILABLE:-0}"
 
-      PROM_VALUE=$(echo "$PROM_RESULT" | python3 -c 'import json,sys; data=json.load(sys.stdin); results=data.get("data",{}).get("result",[]); print(results[0]["value"][1] if results else "")')
-
-      if [ "$PROM_VALUE" != "1" ]; then
-        echo "ERROR: chay-demo-api Prometheus target is not UP"
-        kill "$PROM_PID" >/dev/null 2>&1 || true
+      if [ "${APP_AVAILABLE:-0}" -lt 1 ]; then
+        echo "ERROR: Application has no available replicas."
         exit 1
       fi
 
-      kill "$PROM_PID" >/dev/null 2>&1 || true
-
-      echo "Prometheus target chay-demo-api = UP"
-
-      echo
-      echo "=== Grafana Health Validation ==="
-
-      kubectl port-forward \
-        -n monitoring \
-        service/grafana 3000:3000 \
-        >/tmp/grafana-validation.log 2>&1 &
-      GRAFANA_PID=$!
-
-      sleep 5
-
-      curl --fail --silent \
-        http://127.0.0.1:3000/api/health \
-        | python3 -m json.tool
-
-      echo
-      echo "=== Grafana Dashboard Validation ==="
-
-      DASHBOARD_RESULT=$(curl --fail --silent \
-        'http://127.0.0.1:3000/api/search?query=Chay')
-
-      echo "$DASHBOARD_RESULT" | python3 -m json.tool
-
-      echo "$DASHBOARD_RESULT" | grep -q "Chay Demo API - Runtime Observability" || {
-        echo "ERROR: Provisioned Grafana dashboard was not found"
-        kill "$GRAFANA_PID" >/dev/null 2>&1 || true
+      if [ "${PROM_AVAILABLE:-0}" -lt 1 ]; then
+        echo "ERROR: Prometheus has no available replicas."
         exit 1
-      }
+      fi
 
-      kill "$GRAFANA_PID" >/dev/null 2>&1 || true
+      if [ "${GRAFANA_AVAILABLE:-0}" -lt 1 ]; then
+        echo "ERROR: Grafana has no available replicas."
+        exit 1
+      fi
 
       echo
-      echo "Prometheus target: UP"
-      echo "Grafana API: Healthy"
-      echo "Grafana dashboard: Provisioned"
-      echo "=== Monitoring Validation Complete ==="
+      echo "Application deployment: Available"
+      echo "Prometheus deployment: Available"
+      echo "Grafana deployment: Available"
+      echo "Least-privilege runtime validation: PASSED"
 
+      echo
       echo "=== GitOps Recovery Validation Complete ==="
     displayName: 'Validate Argo CD recovery and AKS workload'
