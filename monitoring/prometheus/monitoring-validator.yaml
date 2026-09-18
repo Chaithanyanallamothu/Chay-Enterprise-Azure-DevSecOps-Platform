@@ -30,7 +30,7 @@ spec:
             - -c
           args:
             - |
-              python - <<'PYTHON'
+              python -u - <<'PYTHON'
               import json
               import time
               import urllib.parse
