@@ -194,6 +194,31 @@ steps:
       echo "In-cluster monitoring validation: PASSED"
 
       echo
+      echo "=== k6 Baseline Load Test Validation ==="
+
+      echo "Waiting for k6 baseline workload..."
+      kubectl rollout status deployment/k6-baseline         -n monitoring         --timeout=180s
+
+      echo
+      echo "k6 baseline pod:"
+      kubectl get pods         -n monitoring         -l app=k6-baseline         -o wide
+
+      echo
+      echo "=== k6 Baseline Results ==="
+
+      K6_LOGS=$(kubectl logs         -n monitoring         deployment/k6-baseline)
+
+      echo "$K6_LOGS"
+
+      echo "$K6_LOGS" | grep -q         "K6 BASELINE LOAD TEST: PASSED" || {
+          echo "ERROR: k6 baseline load test did not report PASSED."
+          exit 1
+        }
+
+      echo
+      echo "k6 private AKS baseline validation: PASSED"
+
+      echo
       echo "=== Runtime Readiness Summary ==="
 
       APP_AVAILABLE=$(kubectl get deployment "$(applicationName)"         -n "$(applicationNamespace)"         -o jsonpath='{.status.availableReplicas}')
